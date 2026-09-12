@@ -1,0 +1,60 @@
+# --- 探索 / 稳档阶段工具（不对外发布）---
+# 本机安装的 Matt Pocock 等工程技能（grilling、domain-modeling 等）
+.agents/
+skills-lock.json
+
+# 内部调研与实践笔记（非产品交付物）
+docs/inner/
+
+# 本地 issue / 草稿工单（setup-matt-pocock-skills 等）
+.scratch/
+
+# --- 操作系统 / 编辑器 ---
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
+.DS_Store
+*.swp
+*.swo
+*~
+
+.idea/
+.vscode/
+*.code-workspace
+*.user
+*.suo
+
+# --- 运行时与本地产物 ---
+*.log
+*.tmp
+*.temp
+*.bak
+*.cache
+
+# 本机测试启动项封装目录（若在仓库内误生成）
+.win-autostart/
+
+# PowerShell 模块本地编译/发布残留
+*.psd1.bak
+*.dll
+*.pdb
+bin/
+obj/
+out/
+dist/
+publish/
+
+# Node（若后续引入技能打包脚本）
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# 环境与密钥
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets.json
