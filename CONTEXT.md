@@ -1,65 +1,65 @@
-# Windows 启动项 Harness
+# Windows Startup Entry Harness
 
-为 Agent/用户创建、推荐、验证与卸载 Windows 用户态启动项的技能与配套 CLI。覆盖登录自启与计划任务上的定时执行；不覆盖登录前开机服务。
+Skill and companion CLI for creating, recommending, verifying, and uninstalling current-user Windows startup entries. Covers logon autostart and scheduled execution via Task Scheduler; does not cover pre-logon boot services.
 
 ## Language
 
-**启动项**:
-一条已注册的、在约定时机拉起「业务命令」的持久化配置（含落点元数据与可选封装产物）。
-_Avoid_: 自启动、开机项、持久化（泛指安全语境）
+**Startup entry** (启动项):
+A registered, persistent configuration that launches a **business command** at an agreed timing (includes landing metadata and optional packaging artifacts).
+_Avoid_: 自启动, 开机项, persistence (generic security sense)
 
-**业务命令**:
-用户真正要跑的可执行文件 + 参数（对外统一入口）；脚本/快捷方式由内部包装成解释器调用后再写入落点。
-_Avoid_: 目标程序、payload、入口命令（与隐藏入口混淆时）
+**Business command** (业务命令):
+The executable plus arguments the user actually wants to run (the external entry point). Scripts and shortcuts are wrapped internally into interpreter invocations before being written to a landing.
+_Avoid_: target program, payload, entry command (when that would confuse with the hidden entry)
 
-**落点**:
-启动项写入的具体机制：计划任务、Startup 文件夹快捷方式、注册表 Run 键等之一。
-_Avoid_: 后端、存储、渠道
+**Landing** (落点):
+The concrete mechanism where a startup entry is written: scheduled task, Startup-folder shortcut, or registry Run key, among others.
+_Avoid_: backend, storage, channel
 
-**推荐引擎**:
-根据环境检测（权限、策略、能否写计划任务等）给出落点排序与理由；用户未指定时采用默认链。
-_Avoid_: 向导、策略引擎
+**Recommendation engine** (推荐引擎):
+Ranks landings and gives reasons from environment checks (permissions, policy, whether a scheduled task can be written, etc.). When the user does not specify a landing, the **default chain** applies.
+_Avoid_: wizard, policy engine
 
-**默认链**:
-登录自启且未指定落点时：计划任务优先 → 失败则 Startup 快捷方式；默认经隐藏入口；默认不写 Run 键。
-_Avoid_: Hermes 方案（实现绰号，非领域名）
+**Default chain** (默认链):
+For logon autostart with no landing specified: prefer scheduled task → on failure, Startup shortcut; default via **hidden entry**; do not write the Run key by default.
+_Avoid_: Hermes scheme (implementation nickname, not a domain name)
 
-**隐藏入口**:
-用 `wscript` + VBS（窗口样式 0）拉起业务脚本，避免登录时控制台闪窗与 CTRL_CLOSE_EVENT 收割。
-_Avoid_: 静默包装、launcher（过泛）
+**Hidden entry** (隐藏入口):
+Launch the business script with `wscript` + VBS (window style 0) so logon does not flash a console and CTRL_CLOSE_EVENT does not tear the process down.
+_Avoid_: silent wrapper, launcher (too vague)
 
-**登录自启**:
-用户登录后触发的启动时机（计划任务 AtLogOn、Startup、Run 键）。
-_Avoid_: 开机自启（易与登录前混淆）
+**Logon autostart** (登录自启):
+Timing that fires after the user logs on (scheduled task AtLogOn, Startup folder, Run key).
+_Avoid_: 开机自启 (easy to confuse with pre-logon boot)
 
-**定时执行**:
-仅计划任务落点上的时间触发；首版支持每天某时（DAILY）与每隔 N 分钟（MINUTE）。与登录自启互斥：一条启动项只选一种时机模式。
-_Avoid_: cron（非 Windows 原生名）、调度（过泛）
+**Scheduled execution** (定时执行):
+Time-based triggers on the scheduled-task landing only. v1 supports once per day at a clock time (DAILY) and every N minutes (MINUTE). Mutually exclusive with logon autostart: one startup entry uses exactly one timing mode.
+_Avoid_: cron (not a native Windows name), scheduling (too vague)
 
-**时机模式**:
-创建启动项时的触发类别：`logon`（登录自启）或 `schedule`（定时执行）；二者择一，不可叠在同一条启动项上。
-_Avoid_: 触发器组合、混合触发
+**Timing mode** (时机模式):
+Trigger category when creating a startup entry: `logon` (logon autostart) or `schedule` (scheduled execution). Choose one; do not stack both on the same startup entry.
+_Avoid_: trigger combination, mixed triggers
 
-**提权运行**:
-计划任务以 Highest 运行（免每次 UAC）；默认关闭，需显式开关。默认始终用户级 Limited。
-_Avoid_: 管理员模式、UAC 绕过
+**Elevated run** (提权运行):
+Run the scheduled task at Highest (avoid repeated UAC). Off by default; requires an explicit switch. Default is always user-level Limited.
+_Avoid_: admin mode, UAC bypass
 
 **CLI**:
-本仓库单一 PowerShell 入口，子命令驱动（含 recommend/add/status/uninstall），标准输出以 JSON 为主，供 Harness 技能解析。
-_Avoid_: StartupManager（外部参考工具）、模块（未特指本入口时）
+This repo’s single PowerShell entry point, driven by subcommands (including recommend / add / status / uninstall). Stdout is primarily JSON for the Harness skill to parse.
+_Avoid_: StartupManager (external reference tool), module (unless specifically this entry point)
 
-**Harness 技能**:
-本仓库的 Agent Skill（标识 `windows-autostart`）：编排检测、推荐、调用 CLI、解释结果；不单独充当唯一执行面。
-_Avoid_: 纯文档技能、插件
+**Harness skill** (Harness 技能):
+This repo’s Agent Skill (`windows-autostart`): orchestrates detection, recommendation, CLI calls, and result explanation. It is not the sole execution surface by itself.
+_Avoid_: docs-only skill, plugin
 
-**封装根目录**:
-存放某启动项业务脚本、隐藏入口、日志等产物的目录；默认 `%USERPROFILE%\.win-autostart\<名称>\`，可配置覆盖。
-_Avoid_: 安装目录、数据目录（过泛）
+**Package root** (封装根目录):
+Directory that holds a startup entry’s business script, hidden entry, logs, and related artifacts. Default `%USERPROFILE%\.win-autostart\<name>\`; overridable.
+_Avoid_: install directory, data directory (too vague)
 
-**当前用户作用域**:
-首版所有落点仅作用于当前登录用户；不提供所有用户 / HKLM / 公共 Startup。
-_Avoid_: 机器级、系统级
+**Current-user scope** (当前用户作用域):
+v1 landings apply only to the current logged-on user. No all-users / HKLM / Public Startup.
+_Avoid_: machine-wide, system-wide
 
-**强制覆盖**:
-同名启动项已存在时，默认拒绝创建；仅显式 `--force` 时先卸载再安装。
-_Avoid_: 更新、upsert（未特指 force 时）
+**Force overwrite** (强制覆盖):
+If a startup entry with the same name already exists, creation is refused by default. Only with explicit `--force` does the tool uninstall then reinstall.
+_Avoid_: update, upsert (unless force is meant)

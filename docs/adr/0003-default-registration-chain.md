@@ -1,3 +1,3 @@
-# 默认链：计划任务 → Startup；隐藏入口；不自动写 Run
+# Default chain: scheduled task → Startup; hidden entry; never auto-write Run
 
-用户态登录自启需要可回退、可诊断、少闪窗。决定未指定落点时：优先注册计划任务，失败再写 Startup 快捷方式，且只落一处（不默认双写）；控制台类业务命令默认经隐藏入口（wscript + VBS）；注册表 Run 键可显式指定写入，但永不进入自动默认链，以降低引号畸形与难做日志/重启的风险。
+User-level logon autostart needs fallback, diagnosability, and minimal console flash. When no landing is specified: prefer registering a scheduled task, then fall back to a Startup shortcut on failure, and land in exactly one place (no default dual-write). Console-style business commands default through a hidden entry (`wscript` + VBS). The registry Run key may be written when explicitly requested, but never enters the automatic default chain, to reduce quoting breakage and hard-to-log / hard-to-restart failures.

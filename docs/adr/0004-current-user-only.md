@@ -1,3 +1,3 @@
-# 首版仅当前用户作用域
+# v1 is current-user scope only
 
-所有用户 / HKLM / 公共 Startup 会强制提权、卸载面扩大，并与「默认 Limited、不做 Service」冲突。决定首版所有落点仅当前用户；机器级能力若需要，另开 ADR 再扩展。
+All-users / HKLM / Public Startup forces elevation, widens the uninstall surface, and conflicts with “default Limited, no Service”. Decide that v1 landings are current-user only; machine-wide capability, if needed, requires a separate ADR.
