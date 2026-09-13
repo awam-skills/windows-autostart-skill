@@ -35,6 +35,9 @@ $RECYCLE.BIN/
 # 本机测试启动项封装目录（若在仓库内误生成）
 .win-autostart/
 
+# 技能目录内指向仓库根 CLI 的硬链接（全局 junction 安装用，勿提交副本）
+skills/windows-autostart/windows-autostart.ps1
+
 # PowerShell 模块本地编译/发布残留
 *.psd1.bak
 *.dll

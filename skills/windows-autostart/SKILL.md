@@ -47,8 +47,12 @@ the packaging layer.
 
 ## How to invoke the CLI
 
+技能目录：本文件所在目录，记为 `$SKILL_DIR`。CLI 与本文件同目录（仓库内为指向根目录脚本的硬链接；全局安装为对该技能目录的 junction）。
+
+优先用 **PowerShell 7 (`pwsh`)**（UTF-8 无 BOM 下 Windows PowerShell 5.1 会解析失败）：
+
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File windows-autostart.ps1 <subcommand> [flags]
+pwsh -NoProfile -ExecutionPolicy Bypass -File "$SKILL_DIR\windows-autostart.ps1" <subcommand> [flags]
 ```
 
 Every subcommand prints a single JSON object to stdout and exits
