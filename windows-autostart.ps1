@@ -1,10 +1,10 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   windows-autostart — Windows 用户态启动项 CLI（单一 PowerShell 入口）。
 
 .DESCRIPTION
-  子命令：recommend | add | status | uninstall
+  子命令：recommend | add | run | status | uninstall
   标准输出：单个 JSON 对象（信封契约，见下）。
   退出码：0 = 成功(ok)；1 = 失败(error)；2 = 部分失败(partial)。
 
@@ -24,7 +24,7 @@
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$script:SubCommands = @('recommend', 'add', 'status', 'uninstall')
+$script:SubCommands = @('recommend', 'add', 'run', 'status', 'uninstall')
 
 # --- 领域常量 ---------------------------------------------------------------
 $script:ManifestSchema   = 'windows-autostart/1'
@@ -34,8 +34,9 @@ $script:CmdExe           = Join-Path $env:SystemRoot 'System32\cmd.exe'
 $script:RunKeyPath       = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 
 # 参数规格：名 -> 类型。类型：string | switch | int(正整数) | enum:v1|v2
-# add 系列的完整契约见 spec「CLI 输入契约（add）」。status/uninstall 增加 Root
+# add 系列的完整契约见 spec「CLI 输入契约（add）」。status/uninstall/run 增加 Root
 # 以对称支持自定义封装根目录（issue 09「与 add 对称」）。
+# add smoke-runs by default after register; pass -NoRun to skip. run -Visible opens a visible console for diagnosis.
 $script:ParamSpec = @{
     'recommend' = @{
         Mode = 'enum:logon|schedule'
@@ -51,7 +52,13 @@ $script:ParamSpec = @{
         Landing      = 'enum:scheduled-task|startup|run-key'
         Elevate      = 'switch'
         Force        = 'switch'
+        NoRun        = 'switch'
         Root         = 'string'
+    }
+    'run' = @{
+        Name    = 'string'
+        Root    = 'string'
+        Visible = 'switch'
     }
     'status' = @{
         Name = 'string'
@@ -67,6 +74,7 @@ $script:ParamSpec = @{
 # 必填参数（按子命令）。
 $script:RequiredParams = @{
     'add'       = @('Name', 'Command', 'Mode')
+    'run'       = @('Name')
     'status'    = @('Name')
     'uninstall' = @('Name')
 }
@@ -606,6 +614,70 @@ function Invoke-Uninstall {
 }
 
 # =============================================================================
+# run：立即按落点/隐藏入口试跑；-Visible 开可见控制台辅助排查
+# =============================================================================
+
+function Invoke-Run {
+    param([string]$Name, [string]$RootOverride, [bool]$Visible)
+
+    $root = Resolve-RootDir $Name $RootOverride
+    $vbsPath = Join-Path $root ($Name + '.vbs')
+    $cmdPath = Join-Path $root ($Name + '.cmd')
+    $outLog = Join-Path $root ($Name + '.out.log')
+    $errLog = Join-Path $root ($Name + '.err.log')
+
+    if (-not (Test-Path -Path $vbsPath -PathType Leaf) -and -not (Test-Path -Path $cmdPath -PathType Leaf)) {
+        throw "entry '$Name' not found under '$root' (missing package artifacts; register with add first)"
+    }
+
+    $via = $null
+    $detail = $null
+
+    if ($Visible) {
+        # 诊断模式：可见控制台跑业务脚本，窗口里的报错可直接用于排查
+        if (-not (Test-Path -Path $cmdPath -PathType Leaf)) {
+            throw "business script missing: $cmdPath"
+        }
+        Start-Process -FilePath $script:CmdExe -ArgumentList @('/k', (Quote-Path $cmdPath)) -WorkingDirectory $root | Out-Null
+        $via = 'visible-console'
+        $detail = '已在可见控制台启动业务脚本；窗口里的报错可直接用于排查。日志仍写入 out/err。'
+    }
+    else {
+        # 与真实落点一致：归属本工具的计划任务优先 Start-ScheduledTask，否则 wscript 拉隐藏入口
+        $taskSnap = Get-ScheduledTaskSnap -Name $Name -VbsPath $vbsPath
+        if ($taskSnap -and $taskSnap['owned']) {
+            Start-ScheduledTask -TaskName $Name
+            $via = 'scheduled-task'
+            $detail = '已通过计划任务立即运行（与登录/定时触发同一 Action）。'
+        }
+        elseif (Test-Path -Path $vbsPath -PathType Leaf) {
+            Start-Process -FilePath $script:WscriptPath -ArgumentList @('//nologo', $vbsPath) -WorkingDirectory $root | Out-Null
+            $via = 'hidden-entry'
+            $detail = '已通过隐藏入口（wscript+VBS）立即运行，与 Startup/Run 落点一致。'
+        }
+        else {
+            throw "cannot run: no owned scheduled task and no hidden entry at '$vbsPath'"
+        }
+    }
+
+    return @{
+        Data = [ordered]@{
+            name    = $Name
+            root    = $root
+            via     = $via
+            visible = [bool]$Visible
+            detail  = $detail
+            next    = [ordered]@{
+                statusHint  = "随后调用 status -Name $Name 查看 diagnosis 与日志尾部"
+                logs        = [ordered]@{ out = $outLog; err = $errLog }
+                visibleHint = if (-not $Visible) { '若仍起不来，用 run -Visible 开可见控制台看实时报错' } else { $null }
+            }
+        }
+        Result = 'ok'
+    }
+}
+
+# =============================================================================
 # status（issue 08）
 # =============================================================================
 
@@ -876,6 +948,30 @@ function Invoke-Add {
         $extraArtifacts['scheduledTaskName'] = $Name
     }
 
+    # 默认立即试跑一次（与真实落点一致），便于当场发现命令/路径问题；-NoRun 可跳过
+    $ranNow = -not [bool]$P['NoRun']
+    $runData = $null
+    $result = 'ok'
+    if ($ranNow) {
+        try {
+            $runResult = Invoke-Run -Name $Name -RootOverride $RootOverride -Visible $false
+            $runData = $runResult['Data']
+        }
+        catch {
+            $result = 'partial'
+            $runData = [ordered]@{
+                attempted = $true
+                error     = $_.Exception.Message
+                detail    = '注册成功但立即试跑失败；请用 run / status 继续排查。'
+                next      = [ordered]@{
+                    statusHint  = "随后调用 status -Name $Name 查看 diagnosis 与日志尾部"
+                    logs        = [ordered]@{ out = $outLog; err = $errLog }
+                    visibleHint = '用 run -Visible 开可见控制台看实时报错'
+                }
+            }
+        }
+    }
+
     return @{
         Data = [ordered]@{
             name           = $Name
@@ -886,8 +982,10 @@ function Invoke-Add {
             fallbackReason = $fallbackReason
             root           = $root
             artifacts      = $extraArtifacts
+            ranNow         = $ranNow
+            run            = $runData
         }
-        Result = 'ok'
+        Result = $result
     }
 }
 
@@ -904,6 +1002,9 @@ function Invoke-CommandHandler {
         }
         'add' {
             return Invoke-Add -P $Params
+        }
+        'run' {
+            return Invoke-Run -Name $Params['Name'] -RootOverride $Params['Root'] -Visible ([bool]$Params['Visible'])
         }
         'status' {
             return Invoke-Status -Name $Params['Name'] -RootOverride $Params['Root']

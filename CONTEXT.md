@@ -45,11 +45,15 @@ Run the scheduled task at Highest (avoid repeated UAC). Off by default; requires
 _Avoid_: admin mode, UAC bypass
 
 **CLI**:
-This repo’s single PowerShell entry point, driven by subcommands (including recommend / add / status / uninstall). Stdout is primarily JSON for the Harness skill to parse.
+This repo’s single PowerShell entry point, driven by subcommands (including recommend / add / run / status / uninstall). Stdout is primarily JSON for the Harness skill to parse.
 _Avoid_: StartupManager (external reference tool), module (unless specifically this entry point)
 
+**Smoke run** (立即试跑):
+After a successful `add`, by default immediately launch the entry the same way the landing would (scheduled task start, or wscript + hidden entry). Optional `-NoRun` skips it. For troubleshooting, `run -Visible` opens a visible console on the business script.
+_Avoid_: dry-run (that implies no side effects), preview
+
 **Harness skill** (Harness 技能):
-This repo’s Agent Skill (`windows-autostart`): orchestrates detection, recommendation, CLI calls, and result explanation. It is not the sole execution surface by itself.
+This repo’s Agent Skill (`windows-autostart`): orchestrates detection, recommendation, CLI calls, smoke-run verification, and result explanation. It is not the sole execution surface by itself.
 _Avoid_: docs-only skill, plugin
 
 **Package root** (封装根目录):
