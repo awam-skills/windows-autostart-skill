@@ -1,0 +1,34 @@
+[
+  {
+    "query": "帮我把这条命令设为登录自启，登录后静默跑起来，先推荐落点再注册。",
+    "should_trigger": true
+  },
+  {
+    "query": "Register a current-user Windows startup entry that runs my script every day at 09:00 and confirm status after add.",
+    "should_trigger": true
+  },
+  {
+    "query": "My windows-autostart entry won't start after login — diagnose with status and a visible run if needed.",
+    "should_trigger": true
+  },
+  {
+    "query": "Uninstall the heartbeat-probe login autostart entry I created earlier with this tool.",
+    "should_trigger": true
+  },
+  {
+    "query": "Create a Windows service that starts at boot before any user logs on, running as SYSTEM.",
+    "should_trigger": false
+  },
+  {
+    "query": "Add a machine-wide startup for all users under Public Startup / HKLM Run.",
+    "should_trigger": false
+  },
+  {
+    "query": "Write a React landing page with a hero and CTA; no Windows or autostart work.",
+    "should_trigger": false
+  },
+  {
+    "query": "Explain how cron works on Linux and give me a crontab example for daily backups.",
+    "should_trigger": false
+  }
+]

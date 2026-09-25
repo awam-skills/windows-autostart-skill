@@ -1,0 +1,119 @@
+{
+  "skill_name": "windows-autostart",
+  "created_by": "skill-creator-advanced",
+  "evals": [
+    {
+      "id": 1,
+      "name": "logon-autostart-smoke",
+      "prompt": "On this Windows machine, register my current-user login self-start named `heartbeat-probe` that runs `powershell.exe -NoProfile -Command \"Start-Sleep -Seconds 2\"`. Use the windows-autostart skill/CLI in this repo. I want it to start after I log in, and I want you to confirm it registered and actually ran once now.",
+      "expected_output": "Calls recommend then add -Mode logon (no -NoRun), parses JSON for landing/artifacts/ranNow, follows with status, and explains diagnosis in plain language. Does not write tasks/shortcuts/registry outside the CLI.",
+      "assertions": [
+        {
+          "text": "Invokes recommend before add",
+          "type": "functional"
+        },
+        {
+          "text": "Invokes add with -Mode logon and without -NoRun unless the user asked to skip",
+          "type": "functional"
+        },
+        {
+          "text": "Parses the CLI JSON envelope (result/data) rather than guessing from tables",
+          "type": "structural"
+        },
+        {
+          "text": "Runs status after add and reports diagnosis / log evidence",
+          "type": "verification"
+        },
+        {
+          "text": "Does not call Start-ScheduledTask, wscript, or edit HKCU Run directly",
+          "type": "negative"
+        }
+      ],
+      "tags": ["smoke", "logon", "cli-tool"]
+    },
+    {
+      "id": 2,
+      "name": "daily-schedule-edge",
+      "prompt": "Set up a current-user scheduled startup entry named `nightly-sync` that runs `C:\\Tools\\sync.cmd` every day at 09:15. Prefer the default landing chain. After register, show me status.",
+      "expected_output": "Uses add -Mode schedule -ScheduleType DAILY -At 09:15, explains that schedule forces scheduled-task, follows with status, and surfaces any fallback only if the CLI reports it.",
+      "assertions": [
+        {
+          "text": "Uses -Mode schedule with -ScheduleType DAILY and -At 09:15",
+          "type": "functional"
+        },
+        {
+          "text": "Does not also request logon triggers on the same entry",
+          "type": "negative"
+        },
+        {
+          "text": "Runs status and maps diagnosis fields for the user",
+          "type": "verification"
+        }
+      ],
+      "tags": ["edge", "schedule", "cli-tool"]
+    },
+    {
+      "id": 3,
+      "name": "refuse-windows-service",
+      "prompt": "Install my app as a Windows service that starts before anyone logs on (SYSTEM / AtStartup). Use whatever autostart skill you have.",
+      "expected_output": "Declines: out of scope for current-user logon/schedule landings. Does not invent Service Control Manager commands or machine-wide landings.",
+      "assertions": [
+        {
+          "text": "States the request is out of scope (service / pre-logon / SYSTEM)",
+          "type": "functional"
+        },
+        {
+          "text": "Does not call sc.exe, New-Service, or HKLM / Public Startup writers",
+          "type": "negative"
+        },
+        {
+          "text": "Does not run add to approximate a boot service via user logon",
+          "type": "negative"
+        }
+      ],
+      "tags": ["negative", "scope"]
+    },
+    {
+      "id": 4,
+      "name": "diagnose-failed-start",
+      "prompt": "I already registered `broken-path` with windows-autostart but it never comes up after login. Help me figure out why and fix it using the skill — don't hand-edit Task Scheduler.",
+      "expected_output": "Uses status (and run / run -Visible as needed), distinguishes failed_to_start vs started_with_stderr, fixes via CLI recreate with -Force, never improvises raw Start-ScheduledTask/wscript.",
+      "assertions": [
+        {
+          "text": "Starts diagnosis with status -Name broken-path",
+          "type": "functional"
+        },
+        {
+          "text": "Maps data.diagnosis and log tails into plain language, distinguishing launch failure from in-app stderr",
+          "type": "functional"
+        },
+        {
+          "text": "Uses run or run -Visible through the CLI when re-trigger or visible diagnosis is needed",
+          "type": "verification"
+        },
+        {
+          "text": "Does not manually invoke Start-ScheduledTask or edit the task XML outside the CLI",
+          "type": "negative"
+        }
+      ],
+      "tags": ["edge", "diagnosis", "cli-tool"]
+    },
+    {
+      "id": 5,
+      "name": "quoted-command-with-spaces",
+      "prompt": "Register logon autostart `spaced-app` for the business command under `C:\\Program Files\\Acme Tool\\app.exe` with args `--quiet`. Smoke-run it.",
+      "expected_output": "Passes a properly quoted -Command so the path with spaces survives ParamSpec parsing, uses -Mode logon, and verifies via status.",
+      "assertions": [
+        {
+          "text": "Quotes the executable path inside -Command because it contains spaces",
+          "type": "functional"
+        },
+        {
+          "text": "Uses add -Mode logon and follows with status",
+          "type": "functional"
+        }
+      ],
+      "tags": ["edge", "quoting"]
+    }
+  ]
+}
