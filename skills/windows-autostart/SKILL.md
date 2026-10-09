@@ -1,4 +1,4 @@
----
+﻿---
 name: windows-autostart
 version: 0.0.1
 description: "Create, inspect, smoke-run, and uninstall current-user Windows logon or scheduled startup entries via windows-autostart.ps1 (JSON). Use for login self-start / 登录自启, DAILY or MINUTE scheduled execution / 定时执行, status diagnosis, or uninstall. Not for Windows services, pre-logon boot, or machine-wide / HKLM / Public Startup."
@@ -91,8 +91,11 @@ Smoke-run fields: `data.ranNow` (false only with `-NoRun`), `data.run.via`
 register succeeded but immediate run failed.
 
 Rules:
-- No `-Landing` → default chain: scheduled task → Startup on failure; only ONE
-  spot; never Run key (ADR-0003).
+- No `-Landing` → default chain: try scheduled task first; on failure,
+  **stop and report** — do NOT silently fall back to Startup. Tell the user why
+  scheduled-task failed, explain the impact of degrading to Startup (no crash
+  auto-restart; only relaunched on next logon), and ask whether to retry with
+  `-Landing startup`. Only ONE landing; never Run key (ADR-0003).
 - Same name exists → refused without `-Force`; with `-Force` uninstall then
   recreate.
 - Do **not** pass `-NoRun` unless the user explicitly asks not to start yet.
