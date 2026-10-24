@@ -2,8 +2,8 @@
 
 > 日期：2026-10-24  
 > 设计依据：`docs/superpowers/specs/2026-10-24-control-plane-design.md`  
-> 状态：阶段 1–4 已在 `/workspace/win-autostart-src/` 落地；阶段 5 待开工  
-> 执行方式（批准后）：建议 subagent-driven 按阶段推进；每阶段结束再开下一阶段详细 plan
+> 状态：阶段 0–5 全部完成；落地分支 `feat/control-plane-local`，合并策略为本地合入 `main`（不走 PR）  
+> 执行方式：本地分支开发，完成后合并回 `main`
 
 ## 开工顺序（硬约束）
 

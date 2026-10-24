@@ -1,8 +1,8 @@
 # windows-autostart 控制面改造设计
 
 > 日期：2026-10-24  
-> 状态：待用户审阅（未开工实现）  
-> 关联：现有 MVP spec（`.scratch/windows-autostart/spec.md`）、ADR-0001～0004、`CONTEXT.md`
+> 状态：已批准并落地（阶段 0–5 完成，见任务清单）  
+> 关联：现有 MVP spec（`.scratch/windows-autostart/spec.md`）、ADR-0001～0006、`CONTEXT.md`
 
 ## 1. 背景与目标
 
@@ -316,10 +316,9 @@ Agent 路径：优先 CLI；UI 与托盘走 HTTP。
 
 ---
 
-## 12. 审阅后下一步
+## 12. 落地结果
 
-用户确认本设计后：
+已按阶段完成（详见 `docs/superpowers/plans/2026-10-24-control-plane-tasks.md`）：
 
-1. 写入 ADR-0005 / 0006，修正 ADR-0003。
-2. 用 writing-plans 产出分任务实现计划（TDD/黑盒）。
-3. 按阶段开工：保活标准固化 → CLI 管理 → Manager Core → 托盘+Web → 迁移现有包。
+1. ADR-0005 / 0006 已写入；ADR-0003 已修正。
+2. 实现计划已执行：保活标准 → CLI 管理 → Manager Core → 托盘+Web → 迁移现有包。
