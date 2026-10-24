@@ -6,6 +6,10 @@ skills-lock.json
 # 内部调研与实践笔记（非产品交付物）
 docs/inner/
 
+# 本机 cutover / 迁移操作日志（绝对路径、主机名、现网包清单等）
+docs/local/
+docs/migration-*.md
+
 # 本地 issue / 草稿工单（setup-matt-pocock-skills 等）
 .scratch/
 

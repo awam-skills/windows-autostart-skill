@@ -2,7 +2,7 @@
 
 ## 0.5.0 — 2026-10-24
 
-Control-plane migration complete (Phases 1–5 on `feat/control-plane-local`).
+Control-plane complete (Phases 1–5).
 
 ### Phase 1 — Keepalive standard
 - Manifest schema `windows-autostart/2` with `keepalive` block
@@ -20,9 +20,11 @@ Control-plane migration complete (Phases 1–5 on `feat/control-plane-local`).
 - .NET tray host + Chinese web panel
 - Contract tests for panel ↔ API
 
-### Phase 5 — Migration & wrap-up
-- Removed `litellm-watchdog.vbs` and `\asr-proxy-keepalive`
-- Rewrote `migrate-to-scheduled-task.ps1` for control-plane model
+### Phase 5 — Migration helper & wrap-up
+- Rewrote `scripts/migrate-to-scheduled-task.ps1` for control-plane model
+  (scheduled-task landing + `taskRestart`; delete package-local `*-watchdog.vbs`)
+- Package-external watchdogs are not the recommended keepalive path
+- Operator cutover notes stay on the machine (not vendored in this repo)
 
 ## 0.0.1 — earlier
 

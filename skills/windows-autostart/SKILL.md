@@ -289,8 +289,9 @@ What migration does:
 1. Ensure Scheduled Task landing + RestartCount 999 / Interval 1min
 2. Upgrade manifest to `windows-autostart/2`, `landing=scheduled-task`, `keepalive.taskRestart=true`
 3. Delete per-package `*-watchdog.vbs` and Startup watchdog shortcuts
-4. Does **not** create new package-local watchdogs 鈥?configure Manager `process` / `health` and `~\.win-autostart\_manager\watches.json` instead
+4. Does **not** create new package-local watchdogs — configure Manager `process` / `health` and `~\.win-autostart\_manager\watches.json` instead
 
+Machine-specific cutover notes (which packages were moved on a given host) belong outside this repo; keep only the helper script and skill/CLI contracts here.
 
 CHANGELOG: repo-root `CHANGELOG.md` (0.5.0).
 

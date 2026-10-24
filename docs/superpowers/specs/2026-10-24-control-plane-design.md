@@ -11,7 +11,7 @@
 - CLI 子命令：`recommend` / `add` / `run` / `status` / `uninstall`；无 `list`，无启停/禁用。
 - 计划任务落点已配置 `RestartCount=999`、`RestartInterval=1min`（任务级失败重启）。
 - MVP Out of Scope 写明：**不做进程守护与持续健康监控**；`status` 仅快照。
-- 本机已有包 `asr-to-openai`、`litellm-gateway`；后者另有手写 `litellm-watchdog.vbs`，未纳入 CLI/技能契约。
+- 现网常见形态：业务包另挂手写 `*-watchdog.vbs` / 包外保活任务，未纳入 CLI/技能契约。
 - 技能文案与 ADR-0003 对「计划任务失败是否自动回退 Startup」表述不完全一致（技能要求询问用户，ADR 写自动回退）。
 
 ### 目标（本改造）
@@ -185,9 +185,7 @@ v1 读取时：默认补全 `keepalive.taskRestart = (landing == scheduled-task)
       "id": "app-config",
       "paths": [
         "D:\\apps\\my-service\\start.py",
-        "D:\\apps\\my-service\\models.json",
-        "D:\\apps\\my-service\\models-b.json",
-        "D:\\apps\\my-service\\models-c.json"
+        "D:\\apps\\my-service\\models.json"
       ],
       "glob": null,
       "targets": ["my-service"],
@@ -324,3 +322,4 @@ Agent 路径：优先 CLI；UI 与托盘走 HTTP。
 
 1. ADR-0005 / 0006 已写入；ADR-0003 已修正。
 2. 实现计划已执行：保活标准 → CLI 管理 → Manager Core → 托盘+Web → 迁移现有包。
+3. 版本见 `CHANGELOG.md` `0.5.0`；现网包迁入用 `scripts/migrate-to-scheduled-task.ps1` + Manager keepalive（本机操作记录不入库）。
