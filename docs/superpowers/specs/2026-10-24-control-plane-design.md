@@ -185,7 +185,9 @@ v1 读取时：默认补全 `keepalive.taskRestart = (landing == scheduled-task)
       "id": "app-config",
       "paths": [
         "D:\\apps\\my-service\\start.py",
-        "G:\\Projects\\19AI\\skills\\litellm-config\\config.yaml"
+        "D:\\apps\\my-service\\models.json",
+        "D:\\apps\\my-service\\models-b.json",
+        "D:\\apps\\my-service\\models-c.json"
       ],
       "glob": null,
       "targets": ["my-service"],

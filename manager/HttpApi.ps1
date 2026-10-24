@@ -224,7 +224,10 @@ function Invoke-ApiHandler {
                         }
                         $doc['items'] = $items
                         Save-WatchesDoc -ManagerRoot $ManagerRoot -Doc $doc
-                        Send-ApiJson -Response $Response -StatusCode 200 -Body @{ ok = $true; saved = $true }
+                        # 重挂 FSW，使 CRUD 立即生效（仅写 JSON 不够）
+                        $wc = 0
+                        try { $wc = Start-ManagerWatchLoop -ManagerRoot $ManagerRoot } catch { $wc = -1 }
+                        Send-ApiJson -Response $Response -StatusCode 200 -Body @{ ok = $true; saved = $true; watchers = $wc }
                         return
                     }
                     if ($method -eq 'POST') {
@@ -242,7 +245,9 @@ function Invoke-ApiHandler {
                         $list += ,$item
                         $doc['items'] = $list
                         Save-WatchesDoc -ManagerRoot $ManagerRoot -Doc $doc
-                        Send-ApiJson -Response $Response -StatusCode 200 -Body @{ ok = $true; item = $item }
+                        $wc = 0
+                        try { $wc = Start-ManagerWatchLoop -ManagerRoot $ManagerRoot } catch { $wc = -1 }
+                        Send-ApiJson -Response $Response -StatusCode 200 -Body @{ ok = $true; item = $item; watchers = $wc }
                         return
                     }
                     Send-ApiJson -Response $Response -StatusCode 405 -Body @{ ok = $false; error = 'method_not_allowed' }
@@ -262,7 +267,9 @@ function Invoke-ApiHandler {
                     }
                     $doc['items'] = $kept
                     Save-WatchesDoc -ManagerRoot $ManagerRoot -Doc $doc
-                    Send-ApiJson -Response $Response -StatusCode 200 -Body @{ ok = $true; removed = $removed; id = $wid }
+                    $wc = 0
+                    try { $wc = Start-ManagerWatchLoop -ManagerRoot $ManagerRoot } catch { $wc = -1 }
+                    Send-ApiJson -Response $Response -StatusCode 200 -Body @{ ok = $true; removed = $removed; id = $wid; watchers = $wc }
                     return
                 }
 
