@@ -227,18 +227,39 @@ function Invoke-EntryHealthCheck {
             $hasHttp = [bool]$Plan.http.url
         }
     }
-    $hasConcrete = ((@($Plan.tcpPorts).Count -gt 0) -or $hasHttp -or [bool]$Plan.processEnabled)
+    $networkConfigured = ((@($Plan.tcpPorts).Count -gt 0) -or $hasHttp) -and [bool]$Plan.healthEnabled
+    $hasConcrete = ($networkConfigured -or [bool]$Plan.processEnabled)
+
+    # When TCP/HTTP is configured, network probes are authoritative.
+    # Process probe is advisory only (WMI CommandLine is often empty for python.exe).
+    $netFailCount = 0
+    $procFailed = $false
+    foreach ($f in @($failures.ToArray())) {
+        if ($f -like 'tcp:*' -or $f -like 'http:*') { $netFailCount++ }
+        elseif ($f -eq 'process') { $procFailed = $true }
+    }
+    $procHardFail = ((-not $networkConfigured) -and $procFailed)
+
     if (-not $hasConcrete) {
         $healthy = $true
     }
+    elseif ($networkConfigured) {
+        $healthy = ($netFailCount -eq 0)
+    }
     else {
-        $healthy = ($failures.Count -eq 0)
+        $healthy = (-not $procHardFail)
+    }
+
+    $soft = New-Object System.Collections.Generic.List[string]
+    if ($networkConfigured -and $procFailed) {
+        $soft.Add('process')
     }
 
     return [ordered]@{
-        healthy  = $healthy
-        failures = @($failures.ToArray())
-        oks      = @($oks.ToArray())
+        healthy      = $healthy
+        failures     = @($failures.ToArray())
+        oks          = @($oks.ToArray())
+        softFailures = @($soft.ToArray())
     }
 }
 
@@ -311,12 +332,17 @@ function Invoke-HealthTick {
 
         if ($check.healthy) {
             Reset-EntryBackoffOnHealthOk -ManagerRoot $ManagerRoot -Name $name
+            $detailParts = @($check.oks)
+            if ($check.softFailures -and @($check.softFailures).Count -gt 0) {
+                $detailParts += @($check.softFailures | ForEach-Object { "soft:$_" })
+            }
+            $okDetail = ($detailParts -join ',')
             Update-ManagerEntryState -ManagerRoot $ManagerRoot -Name $name -Fields @{
                 lastHealthCheckAt         = $nowIso
                 consecutiveHealthFailures = 0
-                lastHealthDetail          = ($check.oks -join ',')
+                lastHealthDetail          = $okDetail
             }
-            $actions.Add([ordered]@{ name = $name; action = 'ok'; detail = ($check.oks -join ',') })
+            $actions.Add([ordered]@{ name = $name; action = 'ok'; detail = $okDetail })
             continue
         }
 

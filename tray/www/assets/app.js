@@ -75,20 +75,27 @@
       var tr = document.createElement('tr');
       var enabled = e.enabled;
       var ms = e.managerState || {};
-      var msText = '';
-      if (ms.desiredEnabled === false) msText = '意图:禁用';
-      else if (ms.consecutiveHealthFailures) msText = '健康失败×' + ms.consecutiveHealthFailures;
-      else if (ms.lastHealthDetail) msText = String(ms.lastHealthDetail);
-      else msText = '—';
+      var msText = formatManagerStatus(ms, name);
 
       tr.innerHTML =
         '<td><a href="#" data-open="' + escapeHtml(name) + '">' + escapeHtml(name) + '</a></td>' +
         '<td>' + escapeHtml(e.landing || '') + '</td>' +
         '<td>' + escapeHtml(e.mode || '') + '</td>' +
         '<td>' + (enabled === true ? '是' : enabled === false ? '否' : '—') + '</td>' +
-        '<td>' + escapeHtml(msText) + '</td>' +
+        '<td>' + msText + '</td>' +
         '<td class="actions"></td>';
       var actions = tr.querySelector('.actions');
+      var btnDetail = document.createElement('button');
+      btnDetail.type = 'button';
+      btnDetail.className = 'btn tiny secondary';
+      btnDetail.textContent = '详情';
+      btnDetail.addEventListener('click', function () {
+        state.selected = name;
+        sel.value = name;
+        showTab('detail');
+        loadDetail();
+      });
+      actions.appendChild(btnDetail);
       ['start', 'stop', 'restart', 'enable', 'disable'].forEach(function (act) {
         var b = document.createElement('button');
         b.type = 'button';
@@ -126,11 +133,72 @@
     });
   }
 
+  function formatManagerStatus(ms, name) {
+    if (name === 'win-autostart-manager') {
+      return '<span class="status-ok">控制面自身</span>';
+    }
+    if (!ms) return '—';
+    if (ms.desiredEnabled === false) return '<span class="status-soft">意图:禁用</span>';
+    var fails = Number(ms.consecutiveHealthFailures || 0);
+    if (fails > 0) {
+      return '<span class="status-bad">健康失败×' + fails + '</span>';
+    }
+    var detail = ms.lastHealthDetail ? String(ms.lastHealthDetail) : '';
+    if (detail.indexOf('soft:') >= 0) {
+      return '<span class="status-soft">正常（process 辅证未通过）</span>';
+    }
+    if (detail) return '<span class="status-ok">正常</span>';
+    return '—';
+  }
+
+  function shortTime(v) {
+    if (!v) return '—';
+    try {
+      var d = new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      return d.toLocaleString();
+    } catch (e) {
+      return String(v);
+    }
+  }
+
   function loadEntries() {
     return api('/entries').then(function (j) {
       state.entries = j.entries || [];
       renderEntries();
     }).catch(function (e) { setErr(e.message || String(e)); });
+  }
+
+  function fillSummary(st, ka) {
+    // GET /entries/{name} → { ok, cli: { data }, managerState }
+    var data = (st && st.cli && st.cli.data) ? st.cli.data : (st.entry || st || {});
+    var ms = (st && st.managerState) || data.managerState || {};
+    var name = data.name || $('detailSelect').value || '—';
+    $('sumName').textContent = name;
+    $('sumLanding').textContent = (data.landing || '—') + ' / ' + (data.mode || '—');
+    var en = data.enabled;
+    $('sumEnabled').textContent = en === true ? '是' : en === false ? '否' : '—';
+    var fails = Number(ms.consecutiveHealthFailures || 0);
+    var healthEl = $('sumHealth');
+    if (name === 'win-autostart-manager') {
+      healthEl.className = 'status-ok';
+      healthEl.textContent = '控制面自身（默认不探针）';
+    } else if (fails > 0) {
+      healthEl.className = 'status-bad';
+      healthEl.textContent = '连续失败 ×' + fails;
+    } else if (ms.lastHealthDetail) {
+      healthEl.className = String(ms.lastHealthDetail).indexOf('soft:') >= 0 ? 'status-soft' : 'status-ok';
+      healthEl.textContent = '正常';
+    } else {
+      healthEl.className = '';
+      healthEl.textContent = '尚无探测记录';
+    }
+    $('sumLastCheck').textContent = shortTime(ms.lastHealthCheckAt);
+    $('sumLastOk').textContent = shortTime(ms.lastHealthOkAt);
+    var restart = shortTime(ms.lastRestartAt);
+    if (ms.lastRestartReason) restart += '（' + ms.lastRestartReason + '）';
+    $('sumLastRestart').textContent = restart;
+    $('sumDetail').textContent = ms.lastHealthDetail || '—';
   }
 
   function loadDetail() {
@@ -144,6 +212,7 @@
     ]).then(function (pair) {
       var st = pair[0];
       var ka = pair[1];
+      fillSummary(st, ka);
       $('detailJson').textContent = JSON.stringify(st, null, 2);
       fillKeepalive(ka.keepalive || {});
       $('kaSaveMsg').textContent = '';
@@ -281,10 +350,15 @@
   }
 
   document.querySelectorAll('.tab').forEach(function (t) {
-    t.addEventListener('click', function () { showTab(t.getAttribute('data-tab')); });
+    t.addEventListener('click', function () {
+      var name = t.getAttribute('data-tab');
+      showTab(name);
+      if (name === 'detail') loadDetail();
+    });
   });
   $('btnRefresh').addEventListener('click', refreshAll);
   $('btnLoadDetail').addEventListener('click', loadDetail);
+  $('detailSelect').addEventListener('change', loadDetail);
   $('keepaliveForm').addEventListener('submit', saveKeepalive);
   $('watchForm').addEventListener('submit', addWatch);
   $('btnPause').addEventListener('click', function () {

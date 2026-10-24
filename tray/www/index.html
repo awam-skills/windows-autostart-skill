@@ -57,16 +57,29 @@
           <label>选择条目
             <select id="detailSelect"></select>
           </label>
-          <button type="button" id="btnLoadDetail" class="btn secondary">加载</button>
+          <button type="button" id="btnLoadDetail" class="btn secondary">刷新</button>
         </div>
       </div>
+      <div id="detailSummary" class="card summary-grid">
+        <h3>运行摘要</h3>
+        <dl id="detailSummaryDl" class="kv">
+          <div><dt>名称</dt><dd id="sumName">—</dd></div>
+          <div><dt>落点 / 模式</dt><dd id="sumLanding">—</dd></div>
+          <div><dt>启用</dt><dd id="sumEnabled">—</dd></div>
+          <div><dt>健康状态</dt><dd id="sumHealth">—</dd></div>
+          <div><dt>最近探测</dt><dd id="sumLastCheck">—</dd></div>
+          <div><dt>最近成功</dt><dd id="sumLastOk">—</dd></div>
+          <div><dt>最近重启</dt><dd id="sumLastRestart">—</dd></div>
+          <div><dt>探测明细</dt><dd id="sumDetail">—</dd></div>
+        </dl>
+      </div>
       <div id="detailStatus" class="card">
-        <h3>状态摘要</h3>
-        <pre id="detailJson">（请选择条目）</pre>
+        <h3>原始状态 JSON</h3>
+        <pre id="detailJson">（请选择条目或从清单点名称）</pre>
       </div>
       <div class="card">
         <h3>保活配置 keepalive</h3>
-        <p class="hint">PUT 会写回包内 manifest（schema 升为 v2）。taskRestart 由落点决定，面板侧重 process/health。</p>
+        <p class="hint">保存后写回包内 manifest。已配置 TCP/HTTP 时以网络探针为准；process 在 CommandLine 不可读时仅作辅证。</p>
         <form id="keepaliveForm" class="form-grid">
           <fieldset>
             <legend>process</legend>
@@ -75,7 +88,7 @@
             <label>命令行包含 <input type="text" id="kaCmdContains" placeholder="litellm" /></label>
           </fieldset>
           <fieldset>
-            <legend>health</legend>
+            <legend>health（推荐）</legend>
             <label><input type="checkbox" id="kaHealthEnabled" /> 启用健康检查</label>
             <label>间隔秒 <input type="number" id="kaInterval" min="1" value="30" /></label>
             <label>失败阈值 <input type="number" id="kaThreshold" min="1" value="3" /></label>

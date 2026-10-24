@@ -231,6 +231,24 @@ try {
     Assert-equal -Expected 0 -Actual ([int]$stOk['consecutiveHealthFailures']) -Name 'health ok resets consecutiveHealthFailures'
     Assert-True -Condition ($null -ne $stOk['lastHealthOkAt']) -Name 'health ok sets lastHealthOkAt'
 
+    # TCP/HTTP 通过时，process 失败不计入整体不健康（本机 CommandLine 常为空）
+    $manifest.keepalive.process.enabled = $true
+    $manifest.keepalive.process.imageName = 'python.exe'
+    $manifest.keepalive.process.commandLineContains = 'never-match-this'
+    ($manifest | ConvertTo-Json -Depth 8) | Set-Content -Path (Join-Path $entryDir ($entryName + '.json')) -Encoding UTF8
+    $script:TcpProbeHook = { param($HostName, $Port, $TimeoutMs) return $true }
+    $script:ProcessProbeHook = { param($ImageName, $CommandLineContains) return $false }
+    $null = Update-ManagerEntryState -ManagerRoot $mgrRoot -Name $entryName -Fields @{
+        consecutiveHealthFailures = 5
+    }
+    $aNet = Invoke-HealthTick -ManagerRoot $mgrRoot -CliPath 'stub' -PackagesRoot $pkgRoot -DryRun -Cfg $cfg -ForceInterval
+    $stNet = Get-ManagerEntryState -ManagerRoot $mgrRoot -Name $entryName
+    Assert-equal -Expected 0 -Actual ([int]$stNet['consecutiveHealthFailures']) -Name 'network ok overrides process fail'
+    Assert-True -Condition ([string]$stNet['lastHealthDetail'] -match 'soft:process') -Name 'soft process recorded in detail'
+    $script:ProcessProbeHook = $null
+    $manifest.keepalive.process.enabled = $false
+    ($manifest | ConvertTo-Json -Depth 8) | Set-Content -Path (Join-Path $entryDir ($entryName + '.json')) -Encoding UTF8
+
     # -------------------------------------------------------------------------
     # 4. Watch debounce → restart requested
     # -------------------------------------------------------------------------
