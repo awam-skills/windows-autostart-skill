@@ -87,84 +87,104 @@ Write-Host "[add default chain]"
 $t = New-Isolated
 try {
     $a = Invoke-CliProc @('add', '-Name', $t.Name, '-Command', 'cmd.exe /c exit /b 0', '-Mode', 'logon', '-Root', $t.Root)
-    Assert (($a.ExitCode -eq 0) -or ($a.ExitCode -eq 2)) 'add exits 0 or 2'
-    Assert (($null -ne $a.Json) -and ($null -ne $a.Json.data)) 'add returns data'
-    $landing = $a.Json.data.landing
-    # canWriteScheduledTask 只是枚举探测；本机仍可能拒写，默认链会回退 Startup
-    Assert (($landing -eq 'scheduled-task') -or ($landing -eq 'startup')) 'default chain lands on scheduled-task or startup'
-    if ($landing -eq 'startup') {
-        Assert ($a.Json.data.fallback -eq $true) 'startup via default chain sets fallback=true'
-    }
-    # 封装产物
-    Assert ($null -ne $a.Json.data.artifacts.businessScript) 'artifacts.businessScript present'
-    Assert ($null -ne $a.Json.data.artifacts.hiddenEntry) 'artifacts.hiddenEntry present'
-    Assert (Test-Path -Path $a.Json.data.artifacts.businessScript) 'business script exists on disk'
-    Assert (Test-Path -Path $a.Json.data.artifacts.hiddenEntry) 'hidden entry exists on disk'
-    $vbs = Get-Content -Path $a.Json.data.artifacts.hiddenEntry -Raw
-    Assert (($vbs -match 'WScript\.Shell') -and ($vbs -match ', 0, False')) 'hidden entry = wscript VBS window style 0'
-    # 默认立即试跑
-    $addData = $a.Json.data
-    Assert ($addData.ranNow -eq $true) 'add defaults to smoke-run'
-    Assert ($null -ne $addData.run) 'add returns data.run'
-    $runVia = [string]$addData.run.via
-    Assert (($runVia -eq 'scheduled-task') -or ($runVia -eq 'hidden-entry')) 'add.run.via is scheduled-task or hidden-entry'
-    # 上下文可观测状态
-    if ($landing -eq 'scheduled-task') {
+    Assert (($null -ne $a.Json) -and ($null -ne $a.Json.data)) 'add returns parseable JSON envelope'
+    if (($a.ExitCode -eq 0) -or ($a.ExitCode -eq 2)) {
+        $landing = $a.Json.data.landing
+        Assert ($landing -eq 'scheduled-task') 'successful default chain lands on scheduled-task (no silent Startup)'
+        Assert ($null -eq $a.Json.data.fallback -or $a.Json.data.fallback -eq $false) 'successful scheduled-task is not a fallback'
+        Assert ($null -ne $a.Json.data.artifacts.businessScript) 'artifacts.businessScript present'
+        Assert ($null -ne $a.Json.data.artifacts.hiddenEntry) 'artifacts.hiddenEntry present'
+        Assert (Test-Path -Path $a.Json.data.artifacts.businessScript) 'business script exists on disk'
+        Assert (Test-Path -Path $a.Json.data.artifacts.hiddenEntry) 'hidden entry exists on disk'
+        $vbs = Get-Content -Path $a.Json.data.artifacts.hiddenEntry -Raw
+        Assert (($vbs -match 'WScript\.Shell') -and ($vbs -match ', 0, False')) 'hidden entry = wscript VBS window style 0'
+        $addData = $a.Json.data
+        Assert ($addData.ranNow -eq $true) 'add defaults to smoke-run'
+        Assert ($null -ne $addData.run) 'add returns data.run'
+        Assert ([string]$addData.run.via -eq 'scheduled-task') 'add.run.via is scheduled-task'
+
         $task = Get-ScheduledTask -TaskName $t.Name -ErrorAction SilentlyContinue
         Assert ($null -ne $task) 'scheduled task exists'
         if ($null -ne $task) {
             Assert ($task.Actions[0].Execute -match 'wscript\.exe$') 'task Action.Execute = wscript.exe'
             Assert ($task.Actions[0].Arguments -like ('*' + $t.Name + '.vbs*')) 'task Action.Arguments references hidden vbs'
             Assert ($task.Settings.ExecutionTimeLimit -eq 'PT0S') 'task ExecutionTimeLimit = no limit (PT0S)'
+            Assert ($task.Settings.RestartCount -eq 999) 'task RestartCount = 999 (keepalive baseline)'
+            Assert ($task.Settings.RestartInterval -eq 'PT1M') 'task RestartInterval = PT1M (keepalive baseline)'
+            Assert ($task.Settings.MultipleInstances -eq 'IgnoreNew') 'task MultipleInstances = IgnoreNew'
         }
-    } else {
+        $mfPath = Join-Path (Join-Path $t.Root $t.Name) ($t.Name + '.json')
+        Assert (Test-Path $mfPath) 'manifest json exists'
+        if (Test-Path $mfPath) {
+            $mf = Get-Content $mfPath -Raw | ConvertFrom-Json
+            Assert ($mf.schema -eq 'windows-autostart/2') 'manifest schema = windows-autostart/2'
+            Assert ($null -ne $mf.keepalive) 'manifest has keepalive'
+            Assert ($mf.keepalive.taskRestart -eq $true) 'scheduled-task keepalive.taskRestart = true'
+            Assert ($mf.keepalive.process.enabled -eq $false) 'process keepalive off by default'
+            Assert ($mf.keepalive.health.enabled -eq $false) 'health keepalive off by default'
+        }
+
+        $c = Invoke-CliProc @('add', '-Name', $t.Name, '-Command', 'cmd.exe /c exit /b 0', '-Mode', 'logon', '-Root', $t.Root)
+        Assert (($c.ExitCode -eq 1) -and ($c.Json.result -eq 'error')) 'same name without -Force is refused'
+        $f = Invoke-CliProc @('add', '-Name', $t.Name, '-Command', 'cmd.exe /c exit /b 0', '-Mode', 'logon', '-Force', '-NoRun', '-Root', $t.Root)
+        Assert ($f.ExitCode -eq 0) 'same name with -Force recreates'
+        Assert ($f.Json.data.ranNow -eq $false) '-NoRun skips smoke-run'
+
+        $rn = Invoke-CliProc @('run', '-Name', $t.Name, '-Root', $t.Root)
+        Assert (($rn.ExitCode -eq 0) -and ($null -ne $rn.Json.data.via)) 'run exits 0 with via'
+        Assert ($rn.Json.data.via -eq 'scheduled-task') 'run via scheduled-task'
+
+        $s = Invoke-CliProc @('status', '-Name', $t.Name, '-Root', $t.Root)
+        Assert (($s.ExitCode -eq 0) -and $s.Json.data.found) 'status finds registered entry'
+        Assert ($null -ne $s.Json.data.diagnosis) 'status has diagnosis field'
+        $snf = Invoke-CliProc @('status', '-Name', 'wa-test-does-not-exist', '-Root', $t.Root)
+        Assert (($snf.ExitCode -eq 0) -and (-not $snf.Json.data.found)) 'status not-found is parseable (found=false)'
+
+        $u = Invoke-CliProc @('uninstall', '-Name', $t.Name, '-Root', $t.Root)
+        Assert ($u.ExitCode -eq 0) 'uninstall exits 0'
+        $pkgGone = -not (Test-Path (Join-Path $t.Root $t.Name))
+        $taskGone = $null -eq (Get-ScheduledTask -TaskName $t.Name -ErrorAction SilentlyContinue)
+        Assert ($pkgGone -and $taskGone) 'uninstall removed package + task'
+        $u2 = Invoke-CliProc @('uninstall', '-Name', $t.Name, '-Root', $t.Root)
+        Assert ($u2.ExitCode -eq 0) 'second uninstall is idempotent (ok)'
+    }
+    else {
+        # ADR-0003: scheduled-task write failure must NOT silently fall back to Startup
+        Assert ($a.ExitCode -eq 1 -and $a.Json.result -eq 'error') 'task write failure exits error (no silent Startup)'
+        $err = [string]$a.Json.error
+        Assert ($err -match 'Landing startup|startup') 'error tells caller to retry with -Landing startup'
+        Assert ($null -eq (Get-ScheduledTask -TaskName $t.Name -ErrorAction SilentlyContinue)) 'no task created on failure'
         $startupDir = [Environment]::GetFolderPath('Startup')
         $lnk = Join-Path $startupDir ($t.Name + '.lnk')
-        Assert (Test-Path $lnk) 'startup shortcut exists'
-        if (Test-Path $lnk) {
-            $shell = New-Object -ComObject WScript.Shell
-            $sc = $shell.CreateShortcut($lnk)
-            Assert ($sc.TargetPath -match 'wscript\.exe$') 'shortcut target = wscript.exe'
-            Assert ($sc.Arguments -like ('*' + $t.Name + '.vbs*')) 'shortcut arguments reference hidden vbs'
-        }
+        Assert (-not (Test-Path $lnk)) 'no Startup shortcut created on failure (no silent fallback)'
     }
-
-    # 3. 同名冲突（-NoRun 避免重复拉起）
-    $c = Invoke-CliProc @('add', '-Name', $t.Name, '-Command', 'cmd.exe /c exit /b 0', '-Mode', 'logon', '-Root', $t.Root)
-    Assert (($c.ExitCode -eq 1) -and ($c.Json.result -eq 'error')) 'same name without -Force is refused'
-    $f = Invoke-CliProc @('add', '-Name', $t.Name, '-Command', 'cmd.exe /c exit /b 0', '-Mode', 'logon', '-Force', '-NoRun', '-Root', $t.Root)
-    Assert ($f.ExitCode -eq 0) 'same name with -Force recreates'
-    Assert ($f.Json.data.ranNow -eq $false) '-NoRun skips smoke-run'
-
-    # 3b. run 子命令（再试跑一次）
-    $rn = Invoke-CliProc @('run', '-Name', $t.Name, '-Root', $t.Root)
-    Assert (($rn.ExitCode -eq 0) -and ($null -ne $rn.Json.data.via)) 'run exits 0 with via'
-    Assert (($rn.Json.data.via -eq 'scheduled-task') -or ($rn.Json.data.via -eq 'hidden-entry')) 'run via matches landing path'
-
-    # 4. status：已注册 + 未找到
-    $s = Invoke-CliProc @('status', '-Name', $t.Name, '-Root', $t.Root)
-    Assert (($s.ExitCode -eq 0) -and $s.Json.data.found) 'status finds registered entry'
-    Assert ($null -ne $s.Json.data.diagnosis) 'status has diagnosis field'
-    $snf = Invoke-CliProc @('status', '-Name', 'wa-test-does-not-exist', '-Root', $t.Root)
-    Assert (($snf.ExitCode -eq 0) -and (-not $snf.Json.data.found)) 'status not-found is parseable (found=false)'
-
-    # 5. uninstall：清理 + 幂等
-    # 注：-Root 是「基础目录」，封装产物落在 <Root>\<Name>\（见 spec「封装根目录」）。
-    $u = Invoke-CliProc @('uninstall', '-Name', $t.Name, '-Root', $t.Root)
-    Assert ($u.ExitCode -eq 0) 'uninstall exits 0'
-    $pkgGone = -not (Test-Path (Join-Path $t.Root $t.Name))
-    $taskGone = $null -eq (Get-ScheduledTask -TaskName $t.Name -ErrorAction SilentlyContinue)
-    Assert ($pkgGone -and $taskGone) 'uninstall removed package + task'
-    $u2 = Invoke-CliProc @('uninstall', '-Name', $t.Name, '-Root', $t.Root)
-    Assert ($u2.ExitCode -eq 0) 'second uninstall is idempotent (ok)'
 }
 finally {
     Cleanup $t.Name $t.Root
 }
 
-# ---------------------------------------------------------------------------
-# 6. 显式 Run 键落点（仅显式；值包裹正确）
-# ---------------------------------------------------------------------------
+Write-Host "[keepalive settings contract]"
+# Contract without Register-ScheduledTask (some agent shells cannot write tasks).
+$src = Get-Content -Path $script:Cli -Raw
+Assert ($src -match '(?m)\$script:TaskRestartCount\s*=\s*999') 'source defines TaskRestartCount = 999'
+Assert ($src -match '(?m)\$script:TaskRestartIntervalMinutes\s*=\s*1') 'source defines TaskRestartIntervalMinutes = 1'
+Assert ($src -match 'function New-AutostartTaskSettings') 'New-AutostartTaskSettings exists'
+Assert ($src -match 'RestartCount \$script:TaskRestartCount') 'Register path uses TaskRestartCount constant'
+Assert ($src -match 'windows-autostart/2') 'manifest schema v2 in source'
+$settings = New-ScheduledTaskSettingsSet `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) `
+    -RestartCount 999 `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -MultipleInstances IgnoreNew `
+    -Hidden
+Assert ($settings.RestartCount -eq 999) 'settings object RestartCount = 999'
+Assert ($settings.RestartInterval -eq 'PT1M') 'settings object RestartInterval = PT1M'
+Assert ($settings.ExecutionTimeLimit -eq 'PT0S') 'settings object ExecutionTimeLimit = PT0S'
+Assert ($settings.MultipleInstances -eq 'IgnoreNew') 'settings object MultipleInstances = IgnoreNew'
+
 Write-Host "[add explicit run-key]"
 $t2 = New-Isolated
 try {
@@ -220,6 +240,21 @@ foreach ($sched in @(@{ Type = 'DAILY'; At = '09:00' }, @{ Type = 'MINUTE'; Ever
     }
     finally { Cleanup $ts.Name $ts.Root }
 }
+
+
+# ---------------------------------------------------------------------------
+# 7b. explicit startup landing: keepalive.taskRestart must be false
+# ---------------------------------------------------------------------------
+Write-Host "[add explicit startup keepalive]"
+$tSu = New-Isolated
+try {
+    $su = Invoke-CliProc @('add', '-Name', $tSu.Name, '-Command', 'cmd.exe /c exit /b 0', '-Mode', 'logon', '-Landing', 'startup', '-NoRun', '-Root', $tSu.Root)
+    Assert ($su.ExitCode -eq 0 -and $su.Json.data.landing -eq 'startup') 'explicit startup landing accepted'
+    $mfSu = Get-Content (Join-Path (Join-Path $tSu.Root $tSu.Name) ($tSu.Name + '.json')) -Raw | ConvertFrom-Json
+    Assert ($mfSu.schema -eq 'windows-autostart/2') 'startup manifest schema v2'
+    Assert ($mfSu.keepalive.taskRestart -eq $false) 'startup keepalive.taskRestart = false'
+}
+finally { Cleanup $tSu.Name $tSu.Root }
 
 # ---------------------------------------------------------------------------
 # 8. 错误路径（无系统写入）
