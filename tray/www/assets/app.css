@@ -1,0 +1,139 @@
+:root {
+  --bg: #0f1419;
+  --panel: #1a2332;
+  --card: #243044;
+  --text: #e7ecf3;
+  --muted: #9aa8bc;
+  --accent: #3b82f6;
+  --accent2: #22c55e;
+  --warn: #f59e0b;
+  --danger: #ef4444;
+  --border: #334155;
+  --radius: 10px;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.top {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, #152033, var(--bg));
+}
+.brand h1 { margin: 0; font-size: 1.35rem; }
+.sub { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.85rem; }
+.top-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  background: #334155;
+  font-size: 0.8rem;
+}
+.badge.ok { background: rgba(34, 197, 94, 0.2); color: #86efac; }
+.badge.warn { background: rgba(245, 158, 11, 0.2); color: #fcd34d; }
+.badge.err { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.75rem 1.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  padding: 0.7rem 1rem;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  font-size: 0.95rem;
+}
+.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+main { flex: 1; padding: 1.25rem 1.5rem 2rem; }
+.panel { display: none; }
+.panel.active { display: block; }
+.panel-head { margin-bottom: 1rem; }
+.panel-head h2 { margin: 0 0 0.35rem; font-size: 1.15rem; }
+.hint { color: var(--muted); font-size: 0.85rem; margin: 0.25rem 0; }
+.btn {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 0.45rem 0.85rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.btn:hover { filter: brightness(1.08); }
+.btn.secondary { background: #475569; }
+.btn.danger { background: var(--danger); }
+.btn.tiny { padding: 0.25rem 0.5rem; font-size: 0.75rem; margin: 0.1rem; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+table { width: 100%; border-collapse: collapse; background: var(--panel); }
+th, td { padding: 0.65rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 0.8rem; }
+tr:last-child td { border-bottom: none; }
+.actions { white-space: nowrap; }
+.card {
+  margin-top: 1rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+}
+.card h3 { margin: 0 0 0.75rem; font-size: 1rem; }
+pre {
+  background: #0b1220;
+  border-radius: 8px;
+  padding: 0.75rem;
+  overflow: auto;
+  max-height: 320px;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+.form-grid { display: grid; gap: 0.75rem; }
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  margin: 0;
+}
+legend { color: var(--muted); padding: 0 0.35rem; }
+label { display: grid; gap: 0.25rem; font-size: 0.85rem; color: var(--muted); }
+input[type="text"], input[type="number"], textarea, select {
+  background: #0b1220;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.45rem 0.55rem;
+  font: inherit;
+}
+input[type="checkbox"] { width: auto; }
+.form-actions { display: flex; gap: 0.75rem; align-items: center; }
+.msg { font-size: 0.85rem; color: var(--accent2); }
+.msg.err { color: #fca5a5; }
+.empty { color: var(--muted); }
+.hidden { display: none !important; }
+.row { display: flex; gap: 0.75rem; align-items: end; flex-wrap: wrap; }
+footer {
+  padding: 0.75rem 1.5rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.8rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.err { color: #fca5a5; }
+code { background: #0b1220; padding: 0.1rem 0.35rem; border-radius: 4px; }

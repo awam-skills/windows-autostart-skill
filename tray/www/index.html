@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>windows-autostart 控制面板</title>
+  <link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>windows-autostart 控制面板</h1>
+      <p class="sub">本机 localhost · 仅 127.0.0.1</p>
+    </div>
+    <div class="top-actions">
+      <span id="healthBadge" class="badge">检测中…</span>
+      <button type="button" id="btnPause" class="btn">暂停探针与热重载</button>
+      <button type="button" id="btnResume" class="btn secondary">恢复</button>
+      <button type="button" id="btnRefresh" class="btn secondary">刷新</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button type="button" class="tab active" data-tab="entries">启动项清单</button>
+    <button type="button" class="tab" data-tab="detail">条目详情</button>
+    <button type="button" class="tab" data-tab="watches">热重载 Watches</button>
+  </nav>
+
+  <main>
+    <section id="tab-entries" class="panel active">
+      <div class="panel-head">
+        <h2>登记清单</h2>
+        <p class="hint">启停 / 启用禁用走控制面 API，再调用注册面 CLI。</p>
+      </div>
+      <div class="table-wrap">
+        <table id="entriesTable">
+          <thead>
+            <tr>
+              <th>名称</th>
+              <th>落点</th>
+              <th>模式</th>
+              <th>启用</th>
+              <th>管理状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p id="entriesEmpty" class="empty hidden">暂无启动项。可用 CLI <code>add</code> 注册。</p>
+    </section>
+
+    <section id="tab-detail" class="panel">
+      <div class="panel-head">
+        <h2>条目详情</h2>
+        <div class="row">
+          <label>选择条目
+            <select id="detailSelect"></select>
+          </label>
+          <button type="button" id="btnLoadDetail" class="btn secondary">加载</button>
+        </div>
+      </div>
+      <div id="detailStatus" class="card">
+        <h3>状态摘要</h3>
+        <pre id="detailJson">（请选择条目）</pre>
+      </div>
+      <div class="card">
+        <h3>保活配置 keepalive</h3>
+        <p class="hint">PUT 会写回包内 manifest（schema 升为 v2）。taskRestart 由落点决定，面板侧重 process/health。</p>
+        <form id="keepaliveForm" class="form-grid">
+          <fieldset>
+            <legend>process</legend>
+            <label><input type="checkbox" id="kaProcEnabled" /> 启用进程存活探测</label>
+            <label>映像名 <input type="text" id="kaImageName" placeholder="python.exe" /></label>
+            <label>命令行包含 <input type="text" id="kaCmdContains" placeholder="litellm" /></label>
+          </fieldset>
+          <fieldset>
+            <legend>health</legend>
+            <label><input type="checkbox" id="kaHealthEnabled" /> 启用健康检查</label>
+            <label>间隔秒 <input type="number" id="kaInterval" min="1" value="30" /></label>
+            <label>失败阈值 <input type="number" id="kaThreshold" min="1" value="3" /></label>
+            <label>TCP 端口（逗号分隔） <input type="text" id="kaTcpPorts" placeholder="4000" /></label>
+            <label>HTTP URL <input type="text" id="kaHttpUrl" placeholder="http://127.0.0.1:4000/health" /></label>
+            <label>期望状态码 <input type="text" id="kaHttpStatus" placeholder="200" value="200" /></label>
+          </fieldset>
+          <div class="form-actions">
+            <button type="submit" class="btn">保存 keepalive</button>
+            <span id="kaSaveMsg" class="msg"></span>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section id="tab-watches" class="panel">
+      <div class="panel-head">
+        <h2>热重载登记</h2>
+        <p class="hint">变更防抖后对 targets 执行 restart（受冷却与暂停约束）。</p>
+      </div>
+      <div class="table-wrap">
+        <table id="watchesTable">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>路径</th>
+              <th>目标</th>
+              <th>启用</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p id="watchesEmpty" class="empty hidden">暂无 watch。</p>
+
+      <div class="card">
+        <h3>新增 Watch</h3>
+        <form id="watchForm" class="form-grid">
+          <label>ID（可空，自动生成） <input type="text" id="wId" /></label>
+          <label>路径（每行一个） <textarea id="wPaths" rows="3" placeholder="G:\path\to\file.py"></textarea></label>
+          <label>glob（目录可选） <input type="text" id="wGlob" placeholder="*.py" /></label>
+          <label>目标条目（逗号分隔） <input type="text" id="wTargets" placeholder="litellm-gateway" /></label>
+          <label><input type="checkbox" id="wEnabled" checked /> 启用</label>
+          <div class="form-actions">
+            <button type="submit" class="btn">添加</button>
+            <span id="wSaveMsg" class="msg"></span>
+          </div>
+        </form>
+        <p class="hint">全局 debounceMs：<span id="debounceMs">—</span></p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>API 前缀 <code>/api/v1</code></span>
+    <span id="footerErr" class="err"></span>
+  </footer>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

@@ -2,7 +2,7 @@
 
 > 日期：2026-10-24  
 > 设计依据：`docs/superpowers/specs/2026-10-24-control-plane-design.md`  
-> 状态：阶段 1–3 已在 `/workspace/win-autostart-src/` 落地；阶段 4+ 待开工  
+> 状态：阶段 1–4 已在 `/workspace/win-autostart-src/` 落地；阶段 5 待开工  
 > 执行方式（批准后）：建议 subagent-driven 按阶段推进；每阶段结束再开下一阶段详细 plan
 
 ## 开工顺序（硬约束）
@@ -82,14 +82,14 @@
 
 目标：托盘宿主承载 API；Web 完成日常管理。
 
-- [ ] 4.1 .NET 托盘项目骨架（单文件发布目标）
-- [ ] 4.2 内嵌/托管静态前端 + 复用阶段 3 API
-- [ ] 4.3 清单页：状态与 start/stop/restart/enable/disable
-- [ ] 4.4 条目详情：日志尾、keepalive 编辑
-- [ ] 4.5 热重载页：CRUD watches
-- [ ] 4.6 托盘菜单：打开面板 / 全局暂停探针与 watch / 退出
-- [ ] 4.7 仅绑定 127.0.0.1；端口冲突提示
-- [ ] 4.8 手工验收清单（中文）写入 `docs/`
+- [x] 4.1 .NET 托盘项目骨架（单文件发布目标）
+- [x] 4.2 内嵌/托管静态前端 + 复用阶段 3 API
+- [x] 4.3 清单页：状态与 start/stop/restart/enable/disable
+- [x] 4.4 条目详情：日志尾、keepalive 编辑
+- [x] 4.5 热重载页：CRUD watches
+- [x] 4.6 托盘菜单：打开面板 / 全局暂停探针与 watch / 退出
+- [x] 4.7 仅绑定 127.0.0.1；端口冲突提示
+- [x] 4.8 手工验收清单（中文）写入 `docs/`
 
 **阶段出口**：用户只用面板即可管理条目与热重载。
 

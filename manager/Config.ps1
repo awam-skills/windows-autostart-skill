@@ -279,3 +279,37 @@ function Get-ManagerEntryState {
     if (-not $state.Entries.ContainsKey($Name)) { return $null }
     return (ConvertTo-PlainMap $state.Entries[$Name])
 }
+
+function Get-ManagerPauseFilePath {
+    param([string]$ManagerRoot)
+    return (Join-Path (Get-ManagerDir -ManagerRoot $ManagerRoot) 'PAUSE')
+}
+
+function Test-ManagerPaused {
+    <#
+      Global pause for health probes and watch restarts (tray menu / flag file).
+      Presence of _manager/PAUSE means paused.
+    #>
+    param([string]$ManagerRoot)
+    $path = Get-ManagerPauseFilePath -ManagerRoot $ManagerRoot
+    return (Test-Path -Path $path -PathType Leaf)
+}
+
+function Set-ManagerPaused {
+    param([string]$ManagerRoot, [bool]$Paused)
+    $path = Get-ManagerPauseFilePath -ManagerRoot $ManagerRoot
+    if ($Paused) {
+        $dir = Split-Path -Parent $path
+        if (-not (Test-Path -Path $dir -PathType Container)) {
+            New-Item -Path $dir -ItemType Directory -Force | Out-Null
+        }
+        Set-Content -Path $path -Value ((Get-Date).ToString('o')) -Encoding UTF8
+        Write-ManagerLog -ManagerRoot $ManagerRoot -Level 'INFO' -Message 'PAUSE flag set (health+watch skipped)'
+    }
+    else {
+        if (Test-Path -Path $path -PathType Leaf) {
+            Remove-Item -Path $path -Force -ErrorAction SilentlyContinue
+            Write-ManagerLog -ManagerRoot $ManagerRoot -Level 'INFO' -Message 'PAUSE flag cleared'
+        }
+    }
+}

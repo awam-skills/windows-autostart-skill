@@ -263,6 +263,10 @@ function Invoke-HealthTick {
     }
 
     $actions = New-Object System.Collections.Generic.List[object]
+    if (Test-ManagerPaused -ManagerRoot $ManagerRoot) {
+        $actions.Add([ordered]@{ name = '*'; action = 'skip'; detail = 'paused' })
+        return @($actions.ToArray())
+    }
     if (-not (Test-Path -Path $PackagesRoot -PathType Container)) {
         return @($actions.ToArray())
     }

@@ -203,16 +203,59 @@ If `manager.json` sets `token`, send header `X-Win-Autostart-Token: <token>`.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "$SKILL_DIR\tests-manager.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$SKILL_DIR\tests-tray-contract.ps1"
 ```
 
 Health/watch respect `desiredEnabled=false` (skip restart). Prefer Manager over package-local `*-watchdog.vbs`.
+
+## Phase 4 — Tray + Web panel
+
+Human operators use the localhost panel; agents still prefer CLI.
+
+### Run panel without tray
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$SKILL_DIR\win-autostart-manager.ps1" serve
+# Open http://127.0.0.1:18765/  (static files from tray/www)
+```
+
+### Tray host (.NET 8 WinForms)
+
+Build on Windows (see `tray/README.md`):
+
+```powershell
+cd "$SKILL_DIR\tray\WinAutostartTray"
+dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o ..\publish
+..\publish\WinAutostartTray.exe --root "$SKILL_DIR"
+```
+
+Tray menu (Chinese): 打开面板 / 暂停探针与热重载 / 恢复 / 退出.  
+Pause writes `%USERPROFILE%\.win-autostart\_manager\PAUSE` (health + watch skip restarts).  
+Exit writes `STOP` and stops Manager only (business entries keep running).
+
+### Extra API (Phase 4)
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET/PUT | `/api/v1/entries/{name}/keepalive` | Read/write manifest.keepalive |
+| POST | `/api/v1/pause` | Create PAUSE flag |
+| POST | `/api/v1/pause/resume` | Clear PAUSE |
+| GET | `/` | Static panel (`tray/www`) |
+
+### Tests
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$SKILL_DIR\tests-tray-contract.ps1"
+```
+
+Manual checklist (Chinese): `docs/manual-acceptance-phase4.md`.
 
 ## Out of scope
 
 No Service, no all-users / HKLM / Public Startup, no default elevation.
 Registration CLI does not daemonize; continuous health/watch belongs to the
-Manager Core (Phase 3; ADR-0005). `status` remains a snapshot; continuous
-health/watch run in `win-autostart-manager.ps1`. Mutating registration
+Manager Core + tray/Web panel (Phase 3–4; ADR-0005 / ADR-0006). `status` remains a snapshot; continuous
+health/watch run in `win-autostart-manager.ps1` (optionally hosted by the tray). Mutating registration
 actions still go through the CLI (or Manager HTTP which calls the CLI).
 
 ## Verified Gotchas

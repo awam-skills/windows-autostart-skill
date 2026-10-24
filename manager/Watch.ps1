@@ -96,6 +96,22 @@ function Invoke-WatchDebounceFlush {
 
     $now = Get-Date
     $done = New-Object System.Collections.Generic.List[object]
+    if (Test-ManagerPaused -ManagerRoot $ManagerRoot) {
+        # Drain due pending without restarting
+        $keysPaused = @($script:WatchPending.Keys)
+        foreach ($id in $keysPaused) {
+            $pend = $script:WatchPending[$id]
+            if (-not $ForceAll) {
+                if ($pend.dueAt -gt $now) { continue }
+            }
+            [void]$script:WatchPending.Remove($id)
+            foreach ($target in @($pend.targets)) {
+                if (-not $target) { continue }
+                $done.Add([ordered]@{ watchId = $id; target = $target; action = 'skip'; detail = 'paused' })
+            }
+        }
+        return @($done.ToArray())
+    }
     $keys = @($script:WatchPending.Keys)
     foreach ($id in $keys) {
         $pend = $script:WatchPending[$id]

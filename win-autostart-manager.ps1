@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  windows-autostart Manager Core — health loop, file watches, localhost HTTP API (no tray).
+  windows-autostart Manager Core — health loop, file watches, localhost HTTP API + optional static Web panel.
 
 .DESCRIPTION
   Subcommands:
@@ -13,6 +13,7 @@
   Dry-run: -DryRun or env WIN_AUTOSTART_MANAGER_DRYRUN=1 records restart intents to
   _manager/test-restarts.jsonl instead of calling CLI stop/run.
 
+  Pause: create _manager/PAUSE to skip health restarts and watch restarts (tray menu).
   Library mode: -LibraryOnly (or dot-source) loads functions without running a subcommand.
 
 .NOTES
@@ -27,6 +28,7 @@ param(
     [string]$CliPath,
     [string]$ManagerRoot,
     [string]$PackagesRoot,
+    [string]$WwwRoot,
     [switch]$DryRun,
     [switch]$LibraryOnly,
     [switch]$VerboseLog,
@@ -119,6 +121,7 @@ function Start-ManagerServe {
         [string]$Root,
         [string]$Cli,
         [string]$PkgRoot,
+        [string]$Www,
         [switch]$Dry
     )
 
@@ -133,6 +136,14 @@ function Start-ManagerServe {
         $listen = '127.0.0.1'
     }
     $port = [int]$cfg['port']
+
+    if (-not $Www) {
+        $Www = Resolve-ManagerWwwRoot -ManagerScriptPath $script:ManagerScriptPath -Override $null
+    }
+    $script:ManagerWwwRoot = $Www
+    if ($Www) {
+        Write-ManagerLog -ManagerRoot $Root -Level 'INFO' -Message ("Serving static panel from {0}" -f $Www)
+    }
 
     $listener = $null
     try {
@@ -158,8 +169,13 @@ function Start-ManagerServe {
         Remove-Item -Path $stopFile -Force -ErrorAction SilentlyContinue
     }
 
-    Write-ManagerLog -ManagerRoot $Root -Level 'INFO' -Message ("serve started cli={0} dryRun={1} watches={2}" -f $Cli, [bool]$Dry, $watchCount)
-    Write-Host ("win-autostart-manager listening http://{0}:{1}/api/v1/health  (Ctrl+C or create {2} to stop)" -f $listen, $port, $stopFile)
+    Write-ManagerLog -ManagerRoot $Root -Level 'INFO' -Message ("serve started cli={0} dryRun={1} watches={2} www={3}" -f $Cli, [bool]$Dry, $watchCount, $Www)
+    if ($Www) {
+        Write-Host ("win-autostart-manager panel http://{0}:{1}/  API http://{0}:{1}/api/v1/health  (Ctrl+C or create {2} to stop)" -f $listen, $port, $stopFile)
+    }
+    else {
+        Write-Host ("win-autostart-manager listening http://{0}:{1}/api/v1/health  (Ctrl+C or create {2} to stop)" -f $listen, $port, $stopFile)
+    }
 
     $lastHealthTick = Get-Date
     $healthTickSec = 5
@@ -175,7 +191,7 @@ function Start-ManagerServe {
             $drain = 0
             try {
                 while ((Process-ManagerHttpRequest -Listener $listener -ManagerRoot $Root -CliPath $Cli `
-                            -PackagesRoot $PkgRoot -StartedAt $startedAt -DryRun:$Dry -Cfg $cfg) -and ($drain -lt 32)) {
+                            -PackagesRoot $PkgRoot -StartedAt $startedAt -DryRun:$Dry -Cfg $cfg -WwwRoot $Www) -and ($drain -lt 32)) {
                     $drain++
                 }
             }
@@ -281,7 +297,7 @@ try {
             # serve
             $null = Invoke-ManagerInit -Root $script:ManagerRoot
             $cli = Resolve-ManagerCli -Override $CliPath
-            Start-ManagerServe -Root $script:ManagerRoot -Cli $cli -PkgRoot $script:PackagesRoot -Dry:$DryRun
+            Start-ManagerServe -Root $script:ManagerRoot -Cli $cli -PkgRoot $script:PackagesRoot -Www $WwwRoot -Dry:$DryRun
             exit 0
         }
     }

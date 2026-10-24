@@ -131,6 +131,7 @@ try {
         '/api/v1/entries/{name}/restart',
         '/api/v1/entries/{name}/enable',
         '/api/v1/entries/{name}/disable',
+        '/api/v1/entries/{name}/keepalive',
         '/api/v1/watches'
     )
     $routePaths = @($routes | ForEach-Object { $_.Path })
