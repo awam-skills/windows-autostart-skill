@@ -1,4 +1,4 @@
----
+﻿---
 name: windows-autostart
 version: 0.0.1
 description: "Create, inspect, smoke-run, and uninstall current-user Windows logon or scheduled startup entries via windows-autostart.ps1 (JSON). Use for login self-start / 登录自启, DAILY or MINUTE scheduled execution / 定时执行, status diagnosis, or uninstall. Not for Windows services, pre-logon boot, or machine-wide / HKLM / Public Startup."
@@ -91,8 +91,11 @@ Smoke-run fields: `data.ranNow` (false only with `-NoRun`), `data.run.via`
 register succeeded but immediate run failed.
 
 Rules:
-- No `-Landing` → default chain: scheduled task → Startup on failure; only ONE
-  spot; never Run key (ADR-0003).
+- No `-Landing` → default chain: try scheduled task first; on failure,
+  **stop and report** — do NOT silently fall back to Startup. Tell the user why
+  scheduled-task failed, explain the impact of degrading to Startup (no crash
+  auto-restart; only relaunched on next logon), and ask whether to retry with
+  `-Landing startup`. Only ONE landing; never Run key (ADR-0003).
 - Same name exists → refused without `-Force`; with `-Force` uninstall then
   recreate.
 - Do **not** pass `-NoRun` unless the user explicitly asks not to start yet.
@@ -138,11 +141,28 @@ Read `data.removed`, `data.skipped` (exists but not ours), `data.absent`.
 Idempotent. Only owned entries are removed (hidden entry referenced by the
 landing + manifest under the package root).
 
+
+## Planned management & control plane (not implemented yet)
+
+Approved design (2026-10-24): registration plane stays this CLI; a **control plane (Manager)** will own inventory, enable/disable/stop, health probes, and file-watch hot reload; tray + localhost Web UI will call Manager only. See `docs/superpowers/specs/2026-10-24-control-plane-design.md` and ADR-0005 / ADR-0006.
+
+**Do not call these as if they exist today** (Phase 2+):
+
+| Intent | Planned form | Phase |
+|--------|--------------|-------|
+| List all entries | `list` | 2 |
+| Enable / disable | `enable` / `disable -Name` | 2 |
+| Stop process (keep registration) | `stop -Name` | 2 |
+| Health / hot-reload config | Manager HTTP / Web panel | 3–4 |
+
+Until those land: inventory by scanning `%USERPROFILE%\.win-autostart\*` and `status -Name`; never invent package-local `*-watchdog.vbs` as the recommended keepalive path (migrate such scripts into Manager config when Phase 3+ exists).
+
 ## Out of scope
 
-No Service, no all-users / HKLM / Public Startup, no default elevation, no
-daemon / auto-relaunch (`status` is a snapshot). Mutating actions go only through
-the CLI.
+No Service, no all-users / HKLM / Public Startup, no default elevation.
+Registration CLI does not daemonize; continuous health/watch belongs to the
+future control plane (ADR-0005). Today `status` is a snapshot. Mutating
+actions go only through the CLI.
 
 ## Verified Gotchas
 

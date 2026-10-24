@@ -345,7 +345,7 @@ function Write-ScheduledTaskLanding {
         -DontStopIfGoingOnBatteries `
         -StartWhenAvailable `
         -ExecutionTimeLimit ([TimeSpan]::Zero) `
-        -RestartCount 3 `
+        -RestartCount 999 `
         -RestartInterval (New-TimeSpan -Minutes 1) `
         -MultipleInstances IgnoreNew `
         -Hidden
@@ -914,24 +914,19 @@ function Invoke-Add {
         }
     }
     else {
-        # 默认链（ADR-0003）：计划任务优先 → 失败回退 Startup；只落一处；永不自动 Run 键
+        # 默认链（ADR-0003）：计划任务优先；失败不自动回退，抛错让用户确认降级。
+        # 降级到 Startup 的影响：进程崩溃后不会自动重启，仅在重新登录时拉起。
         try {
             Write-ScheduledTaskLanding -Name $Name -Mode $Mode -ScheduleType $ScheduleType -At $At -Every $Every -Elevate $Elevate -VbsPath $vbsPath
             $finalLanding = 'scheduled-task'
         }
         catch {
-            try {
-                $lnkPath = Write-StartupLanding -Name $Name -VbsPath $vbsPath -RootPath $root
-                $finalLanding = 'startup'
-                $fallback = $true
-                $fallbackFrom = 'scheduled-task'
-                $fallbackReason = $_.Exception.Message
-                $extraArtifacts['startupShortcut'] = $lnkPath
-            }
-            catch {
-                if (Test-Path -Path $root) { Remove-Item -Path $root -Recurse -Force }
-                throw "failed to register scheduled task and fallback to Startup also failed: $($_.Exception.Message)"
-            }
+            # 清理封装产物，避免孤儿状态
+            if (Test-Path -Path $root) { Remove-Item -Path $root -Recurse -Force }
+            throw ("scheduled-task registration failed: " + $_.Exception.Message +
+                   "`nFallback to Startup shortcut is NOT automatic. " +
+                   "If you want to degrade to Startup (no crash auto-restart; only relaunched on next logon), " +
+                   "retry with -Landing startup.")
         }
     }
 
