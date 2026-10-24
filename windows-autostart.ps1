@@ -27,7 +27,11 @@ $ErrorActionPreference = 'Stop'
 $script:SubCommands = @('recommend', 'add', 'run', 'status', 'uninstall')
 
 # --- 领域常量 ---------------------------------------------------------------
-$script:ManifestSchema   = 'windows-autostart/1'
+$script:ManifestSchema   = 'windows-autostart/2'
+$script:ManifestSchemasAccepted = @('windows-autostart/1', 'windows-autostart/2')
+# Keepalive baseline for scheduled-task landings (ADR-0005 / phase 1). Do not scatter magic numbers.
+$script:TaskRestartCount = 999
+$script:TaskRestartIntervalMinutes = 1
 $script:WscriptPath      = Join-Path $env:SystemRoot 'System32\wscript.exe'
 $script:PowerShellExe    = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $script:CmdExe           = Join-Path $env:SystemRoot 'System32\cmd.exe'
@@ -254,13 +258,43 @@ function Write-HiddenEntry {
     return $vbsPath
 }
 
+function Get-DefaultKeepalive {
+    param([string]$Landing)
+    $taskRestart = ($Landing -eq 'scheduled-task')
+    return [ordered]@{
+        taskRestart = $taskRestart
+        process     = [ordered]@{
+            enabled              = $false
+            imageName            = $null
+            commandLineContains  = $null
+        }
+        health      = [ordered]@{
+            enabled           = $false
+            intervalSec       = 30
+            failureThreshold  = 3
+            tcpPorts          = @()
+            http              = $null
+        }
+    }
+}
+
+function Normalize-Manifest {
+    param($Obj)
+    if ($null -eq $Obj) { return $null }
+    if (-not ($Obj.PSObject.Properties.Name -contains 'keepalive')) {
+        $landing = [string]$Obj.landing
+        $Obj | Add-Member -NotePropertyName keepalive -NotePropertyValue (Get-DefaultKeepalive -Landing $landing) -Force
+    }
+    return $Obj
+}
+
 function Read-Manifest {
     param([string]$Path)
     if (-not (Test-Path -Path $Path -PathType Leaf)) { return $null }
     try {
         $obj = Get-Content -Path $Path -Raw | ConvertFrom-Json
-        if ($obj.schema -ne $script:ManifestSchema) { return $null }
-        return $obj
+        if ($script:ManifestSchemasAccepted -notcontains [string]$obj.schema) { return $null }
+        return (Normalize-Manifest $obj)
     }
     catch { return $null }
 }
@@ -283,9 +317,10 @@ function Write-Manifest {
         elevated     = $Elevate
         root         = $RootPath
         createdAt    = (Get-Date).ToString('o')
+        keepalive    = (Get-DefaultKeepalive -Landing $Landing)
     }
     $manifestPath = Join-Path $RootPath ($Name + '.json')
-    ($m | ConvertTo-Json -Depth 6) | Set-Content -Path $manifestPath -Encoding UTF8
+    ($m | ConvertTo-Json -Depth 8) | Set-Content -Path $manifestPath -Encoding UTF8
     return $manifestPath
 }
 
@@ -319,6 +354,22 @@ function Get-CurrentPrincipalUser {
     return $env:USERNAME
 }
 
+function New-AutostartTaskSettings {
+    <#
+      Standard keepalive baseline for scheduled-task landings (phase 1 / ADR-0005).
+      RestartCount / RestartInterval come from script constants — single source of truth.
+    #>
+    return (New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) `
+        -RestartCount $script:TaskRestartCount `
+        -RestartInterval (New-TimeSpan -Minutes $script:TaskRestartIntervalMinutes) `
+        -MultipleInstances IgnoreNew `
+        -Hidden)
+}
+
 function Write-ScheduledTaskLanding {
     param([string]$Name, [string]$Mode, [string]$ScheduleType, [string]$At,
           [int]$Every, [bool]$Elevate, [string]$VbsPath)
@@ -340,15 +391,7 @@ function Write-ScheduledTaskLanding {
             -RepetitionDuration (New-TimeSpan -Days 3650)
     }
 
-    $settings = New-ScheduledTaskSettingsSet `
-        -AllowStartIfOnBatteries `
-        -DontStopIfGoingOnBatteries `
-        -StartWhenAvailable `
-        -ExecutionTimeLimit ([TimeSpan]::Zero) `
-        -RestartCount 999 `
-        -RestartInterval (New-TimeSpan -Minutes 1) `
-        -MultipleInstances IgnoreNew `
-        -Hidden
+    $settings = New-AutostartTaskSettings
 
     $runLevel = if ($Elevate) { 'Highest' } else { 'Limited' }
     $principal = New-ScheduledTaskPrincipal -UserId (Get-CurrentPrincipalUser) -LogonType Interactive -RunLevel $runLevel
