@@ -19,13 +19,13 @@
 
 ## 阶段 0 — 文档与决策落盘（设计批准后立刻做）
 
-- [ ] 0.1 将本设计与任务清单拷入技能仓库 `docs/superpowers/`
-- [ ] 0.2 新增 ADR-0005（控制面 + 保活档位 + watches）
-- [ ] 0.3 新增 ADR-0006（托盘 + localhost Web）
-- [ ] 0.4 修正 ADR-0003：默认链失败不静默回退 Startup
-- [ ] 0.5 更新 `CONTEXT.md`：增加 Control Plane、Keepalive tier、Watch、Manager 等词条
-- [ ] 0.6 更新 `.scratch/.../spec.md`：收回「进程守护」禁令中由控制面承担的部分；标明 UI
-- [ ] 0.7 更新 `SKILL.md` 命令表与编排（list/enable/disable/stop；管理意图走控制面）
+- [x] 0.1 将本设计与任务清单拷入技能仓库 `docs/superpowers/`
+- [x] 0.2 新增 ADR-0005（控制面 + 保活档位 + watches）
+- [x] 0.3 新增 ADR-0006（托盘 + localhost Web）
+- [x] 0.4 修正 ADR-0003：默认链失败不静默回退 Startup
+- [x] 0.5 更新 `CONTEXT.md`：增加 Control Plane、Keepalive tier、Watch、Manager 等词条
+- [x] 0.6 更新 `.scratch/.../spec.md`：收回「进程守护」禁令中由控制面承担的部分；标明 UI
+- [x] 0.7 更新 `SKILL.md` 命令表与编排（list/enable/disable/stop；管理意图走控制面）
 
 **阶段出口**：仓库文档与 ADR 与设计一致，无实现代码要求。
 
@@ -35,12 +35,12 @@
 
 目标：scheduled-task 保活参数单一实现；manifest v2；去掉「包外手写 watchdog」作为推荐路径。
 
-- [ ] 1.1 抽出 `New-AutostartTaskSettings`（或等价）常量：RestartCount=999、Interval=1min、ExecutionTimeLimit=0、MultipleInstances=IgnoreNew、电池策略、Hidden
-- [ ] 1.2 黑盒/单元：断言 `add` 写入的计划任务 settings 符合标准
-- [ ] 1.3 Manifest schema → `windows-autostart/2`，读写兼容 v1
-- [ ] 1.4 `keepalive` 默认块写入（taskRestart 随 landing）
-- [ ] 1.5 文档：Startup/Run 无 taskRestart；能力降级说明
-- [ ] 1.6 （可选同期）定义 process/health 字段校验，但注册面 **不**启动循环
+- [x] 1.1 抽出 `New-AutostartTaskSettings`（或等价）常量：RestartCount=999、Interval=1min、ExecutionTimeLimit=0、MultipleInstances=IgnoreNew、电池策略、Hidden
+- [x] 1.2 黑盒/单元：断言 `add` 写入的计划任务 settings 符合标准
+- [x] 1.3 Manifest schema → `windows-autostart/2`，读写兼容 v1
+- [x] 1.4 `keepalive` 默认块写入（taskRestart 随 landing）
+- [x] 1.5 文档：Startup/Run 无 taskRestart；能力降级说明
+- [x] 1.6 （可选同期）定义 process/health 字段校验，但注册面 **不**启动循环
 
 **阶段出口**：新注册任务保活可测且一致；旧包可读。
 
@@ -97,11 +97,11 @@
 
 ## 阶段 5 — 迁移与收尾
 
-- [ ] 5.1 迁移 `litellm-gateway`：配置 process/health；移除 `litellm-watchdog.vbs` 及 Startup 侧残留
-- [ ] 5.2 `asr-to-openai`：确认 task-restart；按需加 health
-- [ ] 5.3 `migrate-to-scheduled-task.ps1` 与技能说明对齐新模型
-- [ ] 5.4 回归黑盒 + 技能 evals
-- [ ] 5.5 版本号与 CHANGELOG（若有）
+- [x] 5.1 迁移 `litellm-gateway`：配置 process/health；移除 `litellm-watchdog.vbs` 及 Startup 侧残留
+- [x] 5.2 `asr-to-openai`：确认 task-restart；按需加 health
+- [x] 5.3 `migrate-to-scheduled-task.ps1` 与技能说明对齐新模型
+- [x] 5.4 回归黑盒 + 技能 evals
+- [x] 5.5 版本号与 CHANGELOG（若有）
 
 **阶段出口**：本机无包外 watchdog；设计成功标准全部勾上。
 

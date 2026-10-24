@@ -1,6 +1,6 @@
-﻿---
+---
 name: windows-autostart
-version: 0.0.1
+version: 0.5.0
 description: "Create, inspect, smoke-run, and uninstall current-user Windows logon or scheduled startup entries via windows-autostart.ps1 (JSON). Use for login self-start / 登录自启, DAILY or MINUTE scheduled execution / 定时执行, status diagnosis, or uninstall. Not for Windows services, pre-logon boot, or machine-wide / HKLM / Public Startup."
 ---
 
@@ -11,7 +11,7 @@ scheduled execution / 定时执行) by driving the bundled `windows-autostart.ps
 CLI. The CLI is the only writer; this skill detects, recommends, interprets, and
 explains — it does not register tasks, shortcuts, or registry keys itself.
 
-CLI identity: manifest schema `windows-autostart/1` (no separate `--version`
+CLI identity: manifest schema `windows-autostart/2` (reads v1) (no separate `--version`
 flag). Subcommands and flags below match the live ParamSpec / unknown-parameter
 errors from the packaged script.
 
@@ -272,3 +272,25 @@ Done when: every CLI form used matches the ParamSpec above; JSON `result` was
 parsed (not guessed); after `add`, `status` was run and explained; any mutation
 went through the CLI; out-of-scope requests were declined without improvising
 machine-wide or service landings.
+
+## Phase 5 - Migration & wrap-up
+
+Package-external watchdogs are **not** the recommended keepalive path.
+
+Migration helper (control-plane aligned):
+
+```powershell
+# Prefer elevated when rewriting tasks
+powershell -NoProfile -ExecutionPolicy Bypass -File "$SKILL_DIR\scripts\migrate-to-scheduled-task.ps1"
+# Live copy may also exist at ~\.win-autostart\migrate-to-scheduled-task.ps1
+```
+
+What migration does:
+1. Ensure Scheduled Task landing + RestartCount 999 / Interval 1min
+2. Upgrade manifest to `windows-autostart/2`, `landing=scheduled-task`, `keepalive.taskRestart=true`
+3. Delete per-package `*-watchdog.vbs` and Startup watchdog shortcuts
+4. Does **not** create new package-local watchdogs 鈥?configure Manager `process` / `health` and `~\.win-autostart\_manager\watches.json` instead
+
+
+CHANGELOG: repo-root `CHANGELOG.md` (0.5.0).
+
