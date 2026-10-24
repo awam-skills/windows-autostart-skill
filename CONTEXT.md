@@ -67,3 +67,19 @@ _Avoid_: machine-wide, system-wide
 **Force overwrite** (强制覆盖):
 If a startup entry with the same name already exists, creation is refused by default. Only with explicit `--force` does the tool uninstall then reinstall.
 _Avoid_: update, upsert (unless force is meant)
+
+**Control plane / Manager** (控制面):
+The runtime that aggregates startup-entry inventory, start/stop/enable/disable, health probes, and file-watch hot reload. Hosted by the tray process; exposes localhost HTTP. Distinct from the registration CLI.
+_Avoid_: service manager (implies Windows Service), supervisor (too generic)
+
+**Registration plane** (注册面):
+The `windows-autostart.ps1` CLI that packages the business command and writes exactly one landing. The only writer of package artifacts and landings.
+_Avoid_: installer
+
+**Keepalive tier** (保活档位):
+A named keepalive capability: `task-restart` (scheduled-task settings), optional `process` / `health` (Manager probes), optional `watch` (dev hot reload).
+_Avoid_: watchdog (prefer naming the concrete tier)
+
+**Watch** (热重载监听):
+A Manager-owned registration of one or more filesystem paths (may be outside the package root) mapped to startup-entry targets; on change (debounced) the Manager restarts those targets.
+_Avoid_: inotify (Linux-only term), per-package VBS watcher (deprecated pattern)

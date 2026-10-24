@@ -141,11 +141,28 @@ Read `data.removed`, `data.skipped` (exists but not ours), `data.absent`.
 Idempotent. Only owned entries are removed (hidden entry referenced by the
 landing + manifest under the package root).
 
+
+## Planned management & control plane (not implemented yet)
+
+Approved design (2026-10-24): registration plane stays this CLI; a **control plane (Manager)** will own inventory, enable/disable/stop, health probes, and file-watch hot reload; tray + localhost Web UI will call Manager only. See `docs/superpowers/specs/2026-10-24-control-plane-design.md` and ADR-0005 / ADR-0006.
+
+**Do not call these as if they exist today** (Phase 2+):
+
+| Intent | Planned form | Phase |
+|--------|--------------|-------|
+| List all entries | `list` | 2 |
+| Enable / disable | `enable` / `disable -Name` | 2 |
+| Stop process (keep registration) | `stop -Name` | 2 |
+| Health / hot-reload config | Manager HTTP / Web panel | 3–4 |
+
+Until those land: inventory by scanning `%USERPROFILE%\.win-autostart\*` and `status -Name`; never invent package-local `*-watchdog.vbs` as the recommended keepalive path (migrate such scripts into Manager config when Phase 3+ exists).
+
 ## Out of scope
 
-No Service, no all-users / HKLM / Public Startup, no default elevation, no
-daemon / auto-relaunch (`status` is a snapshot). Mutating actions go only through
-the CLI.
+No Service, no all-users / HKLM / Public Startup, no default elevation.
+Registration CLI does not daemonize; continuous health/watch belongs to the
+future control plane (ADR-0005). Today `status` is a snapshot. Mutating
+actions go only through the CLI.
 
 ## Verified Gotchas
 
