@@ -45,6 +45,7 @@ $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.e
 # Business command: host the manager serve loop
 $command = '"{0}" -NoProfile -ExecutionPolicy Bypass -File "{1}" serve' -f $psExe, $managerFull
 
+# Call operator keeps -Command as one argv; Start-Process ArgumentList splits on spaces.
 $argList = @(
     '-NoProfile', '-ExecutionPolicy', 'Bypass',
     '-File', $cliFull,
@@ -58,16 +59,20 @@ if ($Force) { $argList += '-Force' }
 if ($NoRun) { $argList += '-NoRun' }
 
 Write-Host "Registering manager via CLI:"
-Write-Host ("  {0} {1}" -f $psExe, ($argList -join ' '))
-
-$p = Start-Process -FilePath $psExe -ArgumentList $argList -Wait -PassThru -NoNewWindow `
-    -RedirectStandardOutput (Join-Path $env:TEMP 'win-autostart-register-manager.out.json') `
-    -RedirectStandardError (Join-Path $env:TEMP 'win-autostart-register-manager.err.txt')
+Write-Host ("  exe={0}" -f $psExe)
+Write-Host ("  name={0} landing=scheduled-task norun={1}" -f $Name, ([bool]$NoRun))
 
 $outPath = Join-Path $env:TEMP 'win-autostart-register-manager.out.json'
 $errPath = Join-Path $env:TEMP 'win-autostart-register-manager.err.txt'
-$stdout = if (Test-Path $outPath) { Get-Content -Path $outPath -Raw -ErrorAction SilentlyContinue } else { '' }
-$stderr = if (Test-Path $errPath) { Get-Content -Path $errPath -Raw -ErrorAction SilentlyContinue } else { '' }
+Remove-Item -LiteralPath $outPath, $errPath -Force -ErrorAction SilentlyContinue
+
+$stdout = & $psExe @argList 2> $errPath
+if ($null -eq $stdout) { $stdout = '' }
+elseif ($stdout -is [System.Array]) { $stdout = ($stdout | ForEach-Object { "$_" }) -join "`n" }
+else { $stdout = [string]$stdout }
+Set-Content -LiteralPath $outPath -Value $stdout -Encoding UTF8
+
+$stderr = if (Test-Path -LiteralPath $errPath) { Get-Content -LiteralPath $errPath -Raw -ErrorAction SilentlyContinue } else { '' }
 
 if ($stdout) { Write-Host $stdout }
 
