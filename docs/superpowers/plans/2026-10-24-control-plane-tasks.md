@@ -2,7 +2,7 @@
 
 > 日期：2026-10-24  
 > 设计依据：`docs/superpowers/specs/2026-10-24-control-plane-design.md`  
-> 状态：阶段 0–5 全部完成；落地分支 `feat/control-plane-local`，合并策略为本地合入 `main`（不走 PR）  
+> 状态：阶段 0–5 全部完成；已 Fast-forward 合入本地 `main`（`b31ceee`，不走 PR）  
 > 执行方式：本地分支开发，完成后合并回 `main`
 
 ## 开工顺序（硬约束）
