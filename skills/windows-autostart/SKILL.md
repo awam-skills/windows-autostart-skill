@@ -23,9 +23,9 @@ errors from the packaged script.
 - Required setup: skill directory containing this file and
   `windows-autostart.ps1` (in-repo hard link to repo root; global install may be
   a junction).
-- Allowed effects: only through CLI subcommands `add` / `run` / `uninstall`
-  (and optional `-Force` / `-Elevate` when the user explicitly requests them).
-  `recommend` and `status` are read-only probes.
+- Allowed effects: only through CLI subcommands `add` / `run` / `uninstall` /
+  `enable` / `disable` / `stop` (and optional `-Force` / `-Elevate` when the user
+  explicitly requests them). `recommend`, `status`, and `list` are read-only probes.
 - Primary observable: each CLI call prints one JSON envelope to stdout
   (`command`, `result`=`ok|partial|error`, `error`, `data`) and exits
   `0` / `1` / `2`.
@@ -51,7 +51,10 @@ PowerShell 5.1.
 | Register scheduled entry | `add ... -Mode schedule -ScheduleType DAILY -At HH:mm` or `-ScheduleType MINUTE -Every <n>` | scheduled-task only | same as above; landing must be `scheduled-task` |
 | Smoke / re-trigger | `run -Name <n>` | starts via landing path | `result`, then `status` |
 | Visible diagnose | `run -Name <n> -Visible` | opens business `.cmd` in `cmd /k` | user-visible console + `status` |
-| Inspect | `status -Name <n>` | none | `data.diagnosis`, `data.log.*Tail`, `data.landings` |
+| Inspect | `status -Name <n>` | none | `data.diagnosis`, `data.enabled`, `data.desiredEnabled`, `data.log.*Tail`, `data.landings` |
+| List | `list [-Root <parent>]` | none | `data.entries[]` (`name`,`landing`,`mode`,`enabled`,`schema`,`root`) |
+| Enable / disable | `enable` / `disable -Name <n>` | toggles landing + state intent | `data.enabled`, `data.desiredEnabled` |
+| Stop (keep registration) | `stop -Name <n>` | ends process / task run | `data.stoppedPids`, `data.taskStopped` |
 | Remove | `uninstall -Name <n>` | removes owned landings + package | `data.removed` / `skipped` / `absent` |
 
 `add` optional flags (ParamSpec): `WorkDir`, `Landing`
@@ -142,20 +145,19 @@ Idempotent. Only owned entries are removed (hidden entry referenced by the
 landing + manifest under the package root).
 
 
-## Planned management & control plane (not implemented yet)
+## Management commands (Phase 2) & control plane
 
-Approved design (2026-10-24): registration plane stays this CLI; a **control plane (Manager)** will own inventory, enable/disable/stop, health probes, and file-watch hot reload; tray + localhost Web UI will call Manager only. See `docs/superpowers/specs/2026-10-24-control-plane-design.md` and ADR-0005 / ADR-0006.
+Registration plane CLI now includes inventory/control helpers. A **control plane (Manager)** still owns health probes, file-watch hot reload, tray + localhost Web UI (Phase 3–4). See design.md / ADR-0005 / ADR-0006.
 
-**Do not call these as if they exist today** (Phase 2+):
+| Intent | Command form | Effect |
+|--------|--------------|--------|
+| List all entries | `list [-Root <parent>]` | read-only scan of package parent (default `~\.win-autostart`, skips `_manager`) → `data.entries[]` |
+| Enable | `enable -Name <n> [-Root]` | enable landing; writes `desiredEnabled=true` to `~\.win-autostart\_manager\state.json` |
+| Disable | `disable -Name <n> [-Root]` | disable landing; writes `desiredEnabled=false` (does not uninstall) |
+| Stop process | `stop -Name <n> [-Root]` | end business process / Stop-ScheduledTask; **does not** disable |
+| Inspect (enhanced) | `status -Name <n>` | also `data.enabled`, `data.desiredEnabled`, `data.manager` |
 
-| Intent | Planned form | Phase |
-|--------|--------------|-------|
-| List all entries | `list` | 2 |
-| Enable / disable | `enable` / `disable -Name` | 2 |
-| Stop process (keep registration) | `stop -Name` | 2 |
-| Health / hot-reload config | Manager HTTP / Web panel | 3–4 |
-
-Until those land: inventory by scanning `%USERPROFILE%\.win-autostart\*` and `status -Name`; never invent package-local `*-watchdog.vbs` as the recommended keepalive path (migrate such scripts into Manager config when Phase 3+ exists).
+Never invent package-local `*-watchdog.vbs` as the recommended keepalive path (Manager Phase 3+).
 
 ## Out of scope
 

@@ -50,12 +50,12 @@
 
 目标：无 UI 也能清单 + 控制；为控制面/Agent 提供同构 JSON。
 
-- [ ] 2.1 `list`：扫描 `~\.win-autostart\*`（排除 `_manager`），输出数组
-- [ ] 2.2 `enable` / `disable`：按 landing 分支实现（任务 / Startup 快捷方式约定 / Run）
-- [ ] 2.3 `stop`：按 process 规则或任务关联进程结束；用户 disable 意图写入可观测状态
-- [ ] 2.4 `status` 增强：反映 enabled、若存在 manager 快照则附带
-- [ ] 2.5 黑盒：list → disable → status → enable → run → uninstall 幂等
-- [ ] 2.6 更新 ParamSpec / SKILL 命令表 / evals 触发词
+- [x] 2.1 `list`：扫描 `~\.win-autostart\*`（排除 `_manager`），输出数组
+- [x] 2.2 `enable` / `disable`：按 landing 分支实现（任务 / Startup 快捷方式约定 / Run）
+- [x] 2.3 `stop`：按 process 规则或任务关联进程结束；用户 disable 意图写入可观测状态
+- [x] 2.4 `status` 增强：反映 enabled、若存在 manager 快照则附带
+- [x] 2.5 黑盒：list → disable → status → enable → run → uninstall 幂等
+- [x] 2.6 更新 ParamSpec / SKILL 命令表 / evals 触发词
 
 **阶段出口**：CLI 可管理本机现有两项（asr / litellm）。
 

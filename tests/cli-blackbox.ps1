@@ -18,7 +18,11 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $script:TestDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
-$script:Cli      = Join-Path (Split-Path -Parent $script:TestDir) 'windows-autostart.ps1'
+# Resolve CLI whether this file lives in tests\ or beside windows-autostart.ps1
+$script:CliSibling = Join-Path $script:TestDir 'windows-autostart.ps1'
+$script:CliParent  = Join-Path (Split-Path -Parent $script:TestDir) 'windows-autostart.ps1'
+if (Test-Path -Path $script:CliSibling -PathType Leaf) { $script:Cli = $script:CliSibling }
+else { $script:Cli = $script:CliParent }
 $script:Pwsh     = (Get-Command powershell.exe).Source
 
 $script:Pass = 0
@@ -270,6 +274,65 @@ $e4 = Invoke-CliProc @('add', '-Name', 'x', '-Command', 'cmd.exe', '-Mode', 'sch
 Assert ($e4.ExitCode -eq 1) 'invalid -At -> exit 1'
 $e5 = Invoke-CliProc @('add', '-Name', 'x', '-Command', 'cmd.exe', '-Mode', 'logon', '-At', '09:00')
 Assert ($e5.ExitCode -eq 1) 'schedule params with logon -> exit 1'
+
+# ---------------------------------------------------------------------------
+# 9. Phase 2 management: list / disable / enable / stop (startup landing; no task write)
+# ---------------------------------------------------------------------------
+Write-Host "[management list/enable/disable/stop]"
+$srcMgmt = Get-Content -Path $script:Cli -Raw
+Assert ($srcMgmt -match 'function Invoke-List') 'source contains Invoke-List'
+Assert ($srcMgmt -match 'function Invoke-Enable') 'source contains Invoke-Enable'
+Assert ($srcMgmt -match 'function Invoke-Disable') 'source contains Invoke-Disable'
+Assert ($srcMgmt -match 'function Invoke-Stop') 'source contains Invoke-Stop'
+Assert ($srcMgmt -match '(?m)\$script:SubCommands\s*=') 'source defines SubCommands'
+Assert ($srcMgmt -match "uninstall', 'list', 'enable', 'disable', 'stop'") 'SubCommands includes list/enable/disable/stop'
+
+$tMg = New-Isolated
+# Prefer a dedicated temp parent so list -Root can see the package without touching ~/.win-autostart
+$tMg.Root = Join-Path $env:TEMP ('wa-bb-list-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+try {
+    $addMg = Invoke-CliProc @('add', '-Name', $tMg.Name, '-Command', 'cmd.exe /c exit /b 0', '-Mode', 'logon', '-Landing', 'startup', '-NoRun', '-Root', $tMg.Root)
+    Assert ($addMg.ExitCode -eq 0 -and $addMg.Json.data.landing -eq 'startup') 'management add startup landing ok'
+
+    $lst = Invoke-CliProc @('list', '-Root', $tMg.Root)
+    Assert (($lst.ExitCode -eq 0) -and ($null -ne $lst.Json) -and ($lst.Json.result -eq 'ok')) 'list exits 0 ok'
+    $entryProp = $lst.Json.data.PSObject.Properties['entries']
+    Assert ($null -ne $entryProp) 'list data.entries present'
+    $names = @()
+    if ($null -ne $entryProp -and $null -ne $entryProp.Value) {
+        $names = @($entryProp.Value | ForEach-Object { $_.name })
+    }
+    Assert ($names -contains $tMg.Name) 'list includes registered name'
+
+    $dis = Invoke-CliProc @('disable', '-Name', $tMg.Name, '-Root', $tMg.Root)
+    Assert ($dis.ExitCode -eq 0) 'disable exits 0'
+    $stDis = Invoke-CliProc @('status', '-Name', $tMg.Name, '-Root', $tMg.Root)
+    Assert ($stDis.ExitCode -eq 0 -and $stDis.Json.data.enabled -eq $false) 'status enabled=false after disable'
+    Assert ($stDis.Json.data.desiredEnabled -eq $false) 'status desiredEnabled=false after disable'
+    $startupDir = [Environment]::GetFolderPath('Startup')
+    $disabledLnk = Join-Path $startupDir ($tMg.Name + '.lnk.disabled')
+    Assert (Test-Path $disabledLnk) 'startup shortcut renamed to .lnk.disabled'
+
+    $en = Invoke-CliProc @('enable', '-Name', $tMg.Name, '-Root', $tMg.Root)
+    Assert ($en.ExitCode -eq 0) 'enable exits 0'
+    $stEn = Invoke-CliProc @('status', '-Name', $tMg.Name, '-Root', $tMg.Root)
+    Assert ($stEn.ExitCode -eq 0 -and $stEn.Json.data.enabled -eq $true) 'status enabled=true after enable'
+    Assert ($stEn.Json.data.desiredEnabled -eq $true) 'status desiredEnabled=true after enable'
+    $lnk = Join-Path $startupDir ($tMg.Name + '.lnk')
+    Assert (Test-Path $lnk) 'startup shortcut restored to .lnk'
+
+    $stp = Invoke-CliProc @('stop', '-Name', $tMg.Name, '-Root', $tMg.Root)
+    Assert ($stp.ExitCode -eq 0) 'stop exits 0 (0 processes ok)'
+    Assert ($null -ne $stp.Json.data.stoppedPids) 'stop returns stoppedPids'
+
+    $uMg = Invoke-CliProc @('uninstall', '-Name', $tMg.Name, '-Root', $tMg.Root)
+    Assert ($uMg.ExitCode -eq 0) 'management uninstall exits 0'
+    Assert (-not (Test-Path (Join-Path $tMg.Root $tMg.Name))) 'management uninstall removed package'
+    Assert (-not (Test-Path $lnk) -and -not (Test-Path $disabledLnk)) 'management uninstall removed startup shortcut'
+}
+finally {
+    Cleanup $tMg.Name $tMg.Root
+}
 
 # ---------------------------------------------------------------------------
 Write-Host ""

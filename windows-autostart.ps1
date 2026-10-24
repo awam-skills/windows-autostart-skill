@@ -4,7 +4,7 @@
   windows-autostart — Windows 用户态启动项 CLI（单一 PowerShell 入口）。
 
 .DESCRIPTION
-  子命令：recommend | add | run | status | uninstall
+  子命令：recommend | add | run | status | uninstall | list | enable | disable | stop
   标准输出：单个 JSON 对象（信封契约，见下）。
   退出码：0 = 成功(ok)；1 = 失败(error)；2 = 部分失败(partial)。
 
@@ -24,7 +24,7 @@
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$script:SubCommands = @('recommend', 'add', 'run', 'status', 'uninstall')
+$script:SubCommands = @('recommend', 'add', 'run', 'status', 'uninstall', 'list', 'enable', 'disable', 'stop')
 
 # --- 领域常量 ---------------------------------------------------------------
 $script:ManifestSchema   = 'windows-autostart/2'
@@ -73,6 +73,21 @@ $script:ParamSpec = @{
         Root  = 'string'
         Force = 'switch'
     }
+    'list' = @{
+        Root = 'string'
+    }
+    'enable' = @{
+        Name = 'string'
+        Root = 'string'
+    }
+    'disable' = @{
+        Name = 'string'
+        Root = 'string'
+    }
+    'stop' = @{
+        Name = 'string'
+        Root = 'string'
+    }
 }
 
 # 必填参数（按子命令）。
@@ -81,6 +96,9 @@ $script:RequiredParams = @{
     'run'       = @('Name')
     'status'    = @('Name')
     'uninstall' = @('Name')
+    'enable'    = @('Name')
+    'disable'   = @('Name')
+    'stop'      = @('Name')
 }
 
 # =============================================================================
@@ -468,14 +486,28 @@ function Get-StartupSnap {
     param([string]$Name, [string]$VbsPath)
     $startupDir = [Environment]::GetFolderPath('Startup')
     $lnkPath = Join-Path $startupDir ($Name + '.lnk')
-    if (-not (Test-Path -Path $lnkPath -PathType Leaf)) { return $null }
+    $disabledPath = $lnkPath + '.disabled'
+    $active = $false
+    $pathToRead = $null
+    $enabled = $null
+    if (Test-Path -Path $lnkPath -PathType Leaf) {
+        $active = $true
+        $pathToRead = $lnkPath
+        $enabled = $true
+    }
+    elseif (Test-Path -Path $disabledPath -PathType Leaf) {
+        $active = $true
+        $pathToRead = $disabledPath
+        $enabled = $false
+    }
+    if (-not $active) { return $null }
 
     $owned = $false
     $target = $null
     $argsVal = $null
     try {
         $shell = New-Object -ComObject WScript.Shell
-        $sc = $shell.CreateShortcut($lnkPath)
+        $sc = $shell.CreateShortcut($pathToRead)
         $target = $sc.TargetPath
         $argsVal = $sc.Arguments
         if ($target -match 'wscript\.exe$' -and $argsVal -and ($argsVal -like ('*' + $VbsPath + '*'))) {
@@ -485,11 +517,13 @@ function Get-StartupSnap {
     catch { }
 
     return [ordered]@{
-        exists    = $true
-        path      = $lnkPath
-        target    = $target
-        arguments = $argsVal
-        owned     = $owned
+        exists       = $true
+        enabled      = $enabled
+        path         = $pathToRead
+        disabledPath = $disabledPath
+        target       = $target
+        arguments    = $argsVal
+        owned        = $owned
     }
 }
 
@@ -603,14 +637,16 @@ function Invoke-Uninstall {
     }
     catch { $failed.Add('scheduled-task') }
 
-    # Startup 快捷方式
+    # Startup 快捷方式（含 .lnk.disabled）
     try {
         $startupDir = [Environment]::GetFolderPath('Startup')
         $lnkPath = Join-Path $startupDir ($Name + '.lnk')
+        $disabledLnk = $lnkPath + '.disabled'
         $startupSnap = Get-StartupSnap -Name $Name -VbsPath $vbsPath
         if ($startupSnap) {
             if ($startupSnap['owned']) {
-                Remove-Item -Path $lnkPath -Force
+                if (Test-Path -Path $lnkPath -PathType Leaf) { Remove-Item -Path $lnkPath -Force }
+                if (Test-Path -Path $disabledLnk -PathType Leaf) { Remove-Item -Path $disabledLnk -Force }
                 $removed.Add('startup-shortcut')
             } else { $skipped.Add('startup-shortcut') }
         } else { $absent.Add('startup-shortcut') }
@@ -803,25 +839,40 @@ function Invoke-Status {
         }
     }
 
+    $landing = Resolve-EntryLanding -Name $Name -Root $root -Manifest $manifest -VbsPath $vbsPath
+    $enabled = Get-EntryEnabled -Name $Name -Landing $landing -VbsPath $vbsPath
+
+    $managerSlice = Get-ManagerEntrySlice -Name $Name
+    $desiredEnabled = $null
+    if ($null -ne $managerSlice -and ($managerSlice.Keys -contains 'desiredEnabled')) {
+        $desiredEnabled = [bool]$managerSlice['desiredEnabled']
+    }
+    # manager: attach state entry when present (control-plane snapshot); else null
+    $manager = $managerSlice
+
     return @{
         Data = [ordered]@{
-            name      = $Name
-            found     = $found
-            root      = $root
-            diagnosis = $diagnosis
-            detail    = $detail
-            landings  = [ordered]@{
+            name           = $Name
+            found          = $found
+            root           = $root
+            landing        = $landing
+            enabled        = $enabled
+            desiredEnabled = $desiredEnabled
+            manager        = $manager
+            diagnosis      = $diagnosis
+            detail         = $detail
+            landings       = [ordered]@{
                 scheduledTask   = if ($task) { $task } else { [ordered]@{ exists = $false } }
                 startupShortcut = if ($startup) { $startup } else { [ordered]@{ exists = $false } }
                 runKey          = if ($runKey) { $runKey } else { [ordered]@{ exists = $false } }
             }
-            task      = [ordered]@{
+            task           = [ordered]@{
                 runState = $runState
                 lastRunTime = if ($task) { $task['lastRunTime'] } else { $null }
                 lastResult  = if ($task) { $task['lastResult'] } else { $null }
             }
-            process   = $process
-            log       = [ordered]@{
+            process        = $process
+            log            = [ordered]@{
                 outExists = $outExists
                 errExists = $errExists
                 outTail   = $outTail
@@ -872,9 +923,11 @@ function Test-EntryExists {
     $task = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
     $startupDir = [Environment]::GetFolderPath('Startup')
     $lnk = Join-Path $startupDir ($Name + '.lnk')
+    $lnkDisabled = $lnk + '.disabled'
     $key = Get-Item -Path $script:RunKeyPath -ErrorAction SilentlyContinue
     $rkVal = if ($key) { $key.GetValue($Name, $null) } else { $null }
-    return ($null -ne $manifest -or $null -ne $task -or (Test-Path -Path $lnk) -or ($null -ne $rkVal))
+    $hasStartup = (Test-Path -Path $lnk) -or (Test-Path -Path $lnkDisabled)
+    return ($null -ne $manifest -or $null -ne $task -or $hasStartup -or ($null -ne $rkVal))
 }
 
 function Invoke-Add {
@@ -1028,6 +1081,413 @@ function Invoke-Add {
 }
 
 # =============================================================================
+# 控制面状态（~\.win-autostart\_manager\state.json）与启用探测
+# =============================================================================
+
+function Get-PackagesParentDir {
+    <# Parent that holds package child dirs. Default: %USERPROFILE%\.win-autostart #>
+    param([string]$RootOverride)
+    if ($RootOverride) { return $RootOverride }
+    return (Join-Path $env:USERPROFILE '.win-autostart')
+}
+
+function Get-ManagerStatePath {
+    return (Join-Path (Join-Path (Join-Path $env:USERPROFILE '.win-autostart') '_manager') 'state.json')
+}
+
+function ConvertTo-PlainEntryMap {
+    param($EntryObj)
+    $map = @{}
+    if ($null -eq $EntryObj) { return $map }
+    if ($EntryObj -is [hashtable] -or $EntryObj -is [System.Collections.Specialized.OrderedDictionary]) {
+        foreach ($k in @($EntryObj.Keys)) { $map[[string]$k] = $EntryObj[$k] }
+        return $map
+    }
+    foreach ($p in $EntryObj.PSObject.Properties) {
+        $map[[string]$p.Name] = $p.Value
+    }
+    return $map
+}
+
+function Read-ManagerState {
+    $path = Get-ManagerStatePath
+    $entries = @{}
+    $schema = 'windows-autostart-state/1'
+    if (-not (Test-Path -Path $path -PathType Leaf)) {
+        return @{ Schema = $schema; Entries = $entries }
+    }
+    try {
+        $obj = Get-Content -Path $path -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($obj.schema) { $schema = [string]$obj.schema }
+        if ($obj.entries) {
+            foreach ($p in $obj.entries.PSObject.Properties) {
+                $entries[$p.Name] = (ConvertTo-PlainEntryMap $p.Value)
+            }
+        }
+    }
+    catch { }
+    return @{ Schema = $schema; Entries = $entries }
+}
+
+function Save-ManagerState {
+    param($State)
+    $path = Get-ManagerStatePath
+    $dir = Split-Path -Parent $path
+    if (-not (Test-Path -Path $dir -PathType Container)) {
+        New-Item -Path $dir -ItemType Directory -Force | Out-Null
+    }
+    $orderedEntries = [ordered]@{}
+    foreach ($k in @($State.Entries.Keys | Sort-Object)) {
+        $raw = ConvertTo-PlainEntryMap $State.Entries[$k]
+        $oe = [ordered]@{}
+        foreach ($fk in @($raw.Keys | Sort-Object)) { $oe[$fk] = $raw[$fk] }
+        $orderedEntries[$k] = $oe
+    }
+    $doc = [ordered]@{
+        schema  = $State.Schema
+        entries = $orderedEntries
+    }
+    ($doc | ConvertTo-Json -Depth 8) | Set-Content -Path $path -Encoding UTF8
+}
+
+function Update-ManagerEntry {
+    param([string]$Name, [hashtable]$Fields)
+    $state = Read-ManagerState
+    $cur = @{}
+    if ($state.Entries.ContainsKey($Name)) {
+        $cur = ConvertTo-PlainEntryMap $state.Entries[$Name]
+    }
+    foreach ($k in @($Fields.Keys)) { $cur[$k] = $Fields[$k] }
+    $state.Entries[$Name] = $cur
+    Save-ManagerState $state
+    return $cur
+}
+
+function Get-ManagerEntrySlice {
+    param([string]$Name)
+    $state = Read-ManagerState
+    if (-not $state.Entries.ContainsKey($Name)) { return $null }
+    $map = ConvertTo-PlainEntryMap $state.Entries[$Name]
+    $ordered = [ordered]@{}
+    foreach ($k in @($map.Keys | Sort-Object)) { $ordered[$k] = $map[$k] }
+    return $ordered
+}
+
+function Resolve-EntryLanding {
+    param([string]$Name, [string]$Root, $Manifest, [string]$VbsPath)
+    if ($Manifest -and $Manifest.landing) { return [string]$Manifest.landing }
+    $task = Get-ScheduledTaskSnap -Name $Name -VbsPath $VbsPath
+    if ($task) { return 'scheduled-task' }
+    $startup = Get-StartupSnap -Name $Name -VbsPath $VbsPath
+    if ($startup) { return 'startup' }
+    $rk = Get-RunKeySnap -Name $Name -VbsPath $VbsPath
+    if ($rk) { return 'run-key' }
+    return $null
+}
+
+function Get-EntryEnabled {
+    <#
+      enabled 线索：scheduled-task 看 State；startup 看 .lnk vs .lnk.disabled；
+      run-key 看值是否存在。无法判断时返回 $null。
+    #>
+    param([string]$Name, [string]$Landing, [string]$VbsPath)
+
+    if (-not $Landing) { return $null }
+
+    if ($Landing -eq 'scheduled-task') {
+        $task = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+        if (-not $task) { return $null }
+        $st = [string]$task.State
+        if ($st -eq 'Disabled') { return $false }
+        # Ready / Running / other non-Disabled → treated as enabled
+        return $true
+    }
+    if ($Landing -eq 'startup') {
+        $startupDir = [Environment]::GetFolderPath('Startup')
+        $lnkPath = Join-Path $startupDir ($Name + '.lnk')
+        $disabledPath = $lnkPath + '.disabled'
+        if (Test-Path -Path $lnkPath -PathType Leaf) { return $true }
+        if (Test-Path -Path $disabledPath -PathType Leaf) { return $false }
+        return $null
+    }
+    if ($Landing -eq 'run-key') {
+        $key = Get-Item -Path $script:RunKeyPath -ErrorAction SilentlyContinue
+        if (-not $key) { return $false }
+        $val = $key.GetValue($Name, $null)
+        return ($null -ne $val)
+    }
+    return $null
+}
+
+function Get-ProcessProbeNames {
+    param($Manifest)
+    $names = New-Object System.Collections.Generic.List[string]
+    if ($null -eq $Manifest) { return @() }
+
+    $img = $null
+    if ($Manifest.PSObject.Properties.Name -contains 'keepalive' -and $Manifest.keepalive) {
+        $proc = $Manifest.keepalive.process
+        if ($proc -and ($proc.PSObject.Properties.Name -contains 'imageName') -and $proc.imageName) {
+            $img = [string]$proc.imageName
+        }
+    }
+    if ($img) {
+        $base = [System.IO.Path]::GetFileNameWithoutExtension($img)
+        if ($base) { $names.Add($base) }
+    }
+    elseif ($Manifest.command) {
+        $res = Get-ExeAndRest ([string]$Manifest.command)
+        $exe = $res['Exe']
+        if ($exe -and ([System.IO.Path]::GetExtension($exe).ToLowerInvariant() -eq '.exe')) {
+            $base = [System.IO.Path]::GetFileNameWithoutExtension($exe)
+            if ($base) { $names.Add($base) }
+        }
+    }
+    return @($names)
+}
+
+# =============================================================================
+# list / enable / disable / stop（phase 2）
+# =============================================================================
+
+function Invoke-List {
+    param([string]$RootOverride)
+
+    $parent = Get-PackagesParentDir -RootOverride $RootOverride
+    $entries = New-Object System.Collections.Generic.List[object]
+
+    if (Test-Path -Path $parent -PathType Container) {
+        $dirs = Get-ChildItem -Path $parent -Directory -ErrorAction SilentlyContinue
+        foreach ($d in @($dirs)) {
+            $name = $d.Name
+            if ($name -eq '_manager') { continue }
+
+            $root = $d.FullName
+            $manifestPath = Join-Path $root ($name + '.json')
+            $manifest = Read-Manifest $manifestPath
+            $vbsPath = Join-Path $root ($name + '.vbs')
+            $cmdPath = Join-Path $root ($name + '.cmd')
+            $hasArtifacts = (Test-Path -Path $vbsPath -PathType Leaf) -or (Test-Path -Path $cmdPath -PathType Leaf)
+
+            if (-not $manifest -and -not $hasArtifacts) { continue }
+
+            $landing = Resolve-EntryLanding -Name $name -Root $root -Manifest $manifest -VbsPath $vbsPath
+            $enabled = Get-EntryEnabled -Name $name -Landing $landing -VbsPath $vbsPath
+            $schema = if ($manifest) { [string]$manifest.schema } else { $null }
+            $mode = if ($manifest -and $manifest.mode) { [string]$manifest.mode } else { $null }
+
+            $entries.Add([ordered]@{
+                name    = $name
+                landing = $landing
+                mode    = $mode
+                enabled = $enabled
+                schema  = $schema
+                root    = $root
+            })
+        }
+    }
+
+    # PS 5.1: @($genericList) does NOT unwrap — ConvertTo-Json then type-mismatches.
+    $entryArr = @($entries.ToArray())
+    return @{
+        Data = [ordered]@{
+            parent  = $parent
+            entries = $entryArr
+        }
+        Result = 'ok'
+    }
+}
+
+function Invoke-Enable {
+    param([string]$Name, [string]$RootOverride)
+
+    $root = Resolve-RootDir $Name $RootOverride
+    $vbsPath = Join-Path $root ($Name + '.vbs')
+    $manifest = Read-Manifest (Join-Path $root ($Name + '.json'))
+    $landing = Resolve-EntryLanding -Name $Name -Root $root -Manifest $manifest -VbsPath $vbsPath
+    if (-not $landing) {
+        throw "entry '$Name' not found under '$root' (no manifest/landing)"
+    }
+
+    if ($landing -eq 'scheduled-task') {
+        $task = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+        if (-not $task) { throw "scheduled task '$Name' not found" }
+        try {
+            Enable-ScheduledTask -TaskName $Name -ErrorAction Stop | Out-Null
+        }
+        catch {
+            throw ("failed to enable scheduled task '$Name': " + $_.Exception.Message)
+        }
+    }
+    elseif ($landing -eq 'startup') {
+        $startupDir = [Environment]::GetFolderPath('Startup')
+        $lnkPath = Join-Path $startupDir ($Name + '.lnk')
+        $disabledPath = $lnkPath + '.disabled'
+        if (Test-Path -Path $lnkPath -PathType Leaf) {
+            # already enabled
+        }
+        elseif (Test-Path -Path $disabledPath -PathType Leaf) {
+            Rename-Item -Path $disabledPath -NewName (Split-Path -Leaf $lnkPath) -Force
+        }
+        else {
+            throw "startup shortcut for '$Name' not found (neither .lnk nor .lnk.disabled)"
+        }
+    }
+    elseif ($landing -eq 'run-key') {
+        if (-not (Test-Path -Path $vbsPath -PathType Leaf)) {
+            throw "cannot enable run-key for '$Name': hidden entry missing at '$vbsPath'"
+        }
+        $null = Write-RunKeyLanding -Name $Name -VbsPath $vbsPath
+    }
+    else {
+        throw "unsupported landing '$landing' for enable"
+    }
+
+    $updatedAt = (Get-Date).ToString('o')
+    $null = Update-ManagerEntry -Name $Name -Fields @{
+        desiredEnabled = $true
+        updatedAt      = $updatedAt
+    }
+
+    $enabled = Get-EntryEnabled -Name $Name -Landing $landing -VbsPath $vbsPath
+    return @{
+        Data = [ordered]@{
+            name           = $Name
+            landing        = $landing
+            enabled        = $enabled
+            desiredEnabled = $true
+            root           = $root
+        }
+        Result = 'ok'
+    }
+}
+
+function Invoke-Disable {
+    param([string]$Name, [string]$RootOverride)
+
+    $root = Resolve-RootDir $Name $RootOverride
+    $vbsPath = Join-Path $root ($Name + '.vbs')
+    $manifest = Read-Manifest (Join-Path $root ($Name + '.json'))
+    $landing = Resolve-EntryLanding -Name $Name -Root $root -Manifest $manifest -VbsPath $vbsPath
+    if (-not $landing) {
+        throw "entry '$Name' not found under '$root' (no manifest/landing)"
+    }
+
+    if ($landing -eq 'scheduled-task') {
+        $task = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+        if (-not $task) { throw "scheduled task '$Name' not found" }
+        try {
+            Disable-ScheduledTask -TaskName $Name -ErrorAction Stop | Out-Null
+        }
+        catch {
+            throw ("failed to disable scheduled task '$Name': " + $_.Exception.Message)
+        }
+    }
+    elseif ($landing -eq 'startup') {
+        $startupDir = [Environment]::GetFolderPath('Startup')
+        $lnkPath = Join-Path $startupDir ($Name + '.lnk')
+        $disabledPath = $lnkPath + '.disabled'
+        if (Test-Path -Path $disabledPath -PathType Leaf) {
+            # already disabled
+        }
+        elseif (Test-Path -Path $lnkPath -PathType Leaf) {
+            Rename-Item -Path $lnkPath -NewName ((Split-Path -Leaf $lnkPath) + '.disabled') -Force
+        }
+        else {
+            throw "startup shortcut for '$Name' not found (neither .lnk nor .lnk.disabled)"
+        }
+    }
+    elseif ($landing -eq 'run-key') {
+        $key = Get-Item -Path $script:RunKeyPath -ErrorAction SilentlyContinue
+        $val = if ($key) { $key.GetValue($Name, $null) } else { $null }
+        if ($null -ne $val) {
+            Remove-ItemProperty -Path $script:RunKeyPath -Name $Name -ErrorAction Stop
+        }
+        # value already absent: still record desiredEnabled=false
+    }
+    else {
+        throw "unsupported landing '$landing' for disable"
+    }
+
+    $updatedAt = (Get-Date).ToString('o')
+    $null = Update-ManagerEntry -Name $Name -Fields @{
+        desiredEnabled = $false
+        updatedAt      = $updatedAt
+    }
+
+    $enabled = Get-EntryEnabled -Name $Name -Landing $landing -VbsPath $vbsPath
+    return @{
+        Data = [ordered]@{
+            name           = $Name
+            landing        = $landing
+            enabled        = $enabled
+            desiredEnabled = $false
+            root           = $root
+        }
+        Result = 'ok'
+    }
+}
+
+function Invoke-Stop {
+    param([string]$Name, [string]$RootOverride)
+
+    $root = Resolve-RootDir $Name $RootOverride
+    $vbsPath = Join-Path $root ($Name + '.vbs')
+    $manifest = Read-Manifest (Join-Path $root ($Name + '.json'))
+    if (-not $manifest -and -not (Test-Path -Path $vbsPath -PathType Leaf)) {
+        throw "entry '$Name' not found under '$root'"
+    }
+
+    $probeNames = Get-ProcessProbeNames -Manifest $manifest
+    $stoppedPids = New-Object System.Collections.Generic.List[int]
+    foreach ($probe in $probeNames) {
+        try {
+            $procs = @(Get-Process -Name $probe -ErrorAction SilentlyContinue)
+            foreach ($p in $procs) {
+                try {
+                    Stop-Process -Id $p.Id -Force -ErrorAction Stop
+                    $stoppedPids.Add([int]$p.Id)
+                }
+                catch { }
+            }
+        }
+        catch { }
+    }
+
+    $taskStopped = $false
+    $task = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+    if ($task) {
+        try {
+            Stop-ScheduledTask -TaskName $Name -ErrorAction Stop
+            $taskStopped = $true
+        }
+        catch {
+            # task may already be idle; do not fail the whole stop
+            $taskStopped = $false
+        }
+    }
+
+    $stopAt = (Get-Date).ToString('o')
+    $null = Update-ManagerEntry -Name $Name -Fields @{
+        lastStopAt = $stopAt
+        updatedAt  = $stopAt
+    }
+
+    $pidArr = @($stoppedPids.ToArray())
+    $probeArr = @($probeNames)
+    return @{
+        Data = [ordered]@{
+            name        = $Name
+            root        = $root
+            stoppedPids = $pidArr
+            taskStopped = $taskStopped
+            probes      = $probeArr
+        }
+        Result = 'ok'
+    }
+}
+
+# =============================================================================
 # 分发
 # =============================================================================
 
@@ -1049,6 +1509,18 @@ function Invoke-CommandHandler {
         }
         'uninstall' {
             return Invoke-Uninstall -Name $Params['Name'] -RootOverride $Params['Root']
+        }
+        'list' {
+            return Invoke-List -RootOverride $Params['Root']
+        }
+        'enable' {
+            return Invoke-Enable -Name $Params['Name'] -RootOverride $Params['Root']
+        }
+        'disable' {
+            return Invoke-Disable -Name $Params['Name'] -RootOverride $Params['Root']
+        }
+        'stop' {
+            return Invoke-Stop -Name $Params['Name'] -RootOverride $Params['Root']
         }
         default {
             throw "unhandled subcommand '$Sub'"
