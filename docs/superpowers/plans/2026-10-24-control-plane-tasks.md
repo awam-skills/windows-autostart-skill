@@ -2,7 +2,7 @@
 
 > 日期：2026-10-24  
 > 设计依据：`docs/superpowers/specs/2026-10-24-control-plane-design.md`  
-> 状态：设计待审阅；**本清单在设计批准前不执行实现**  
+> 状态：阶段 1–3 已在 `/workspace/win-autostart-src/` 落地；阶段 4+ 待开工  
 > 执行方式（批准后）：建议 subagent-driven 按阶段推进；每阶段结束再开下一阶段详细 plan
 
 ## 开工顺序（硬约束）
@@ -65,14 +65,14 @@
 
 目标：健康检查与热重载在控制层可运行、可测（可先用 `manager` 子命令或独立 `win-autostart-manager` 控制台宿主）。
 
-- [ ] 3.1 `_manager` 目录与 `manager.json` / `watches.json` / `state.json` 契约
-- [ ] 3.2 清单聚合服务（复用 list）
-- [ ] 3.3 重启管线：`restart` + 冷却 + 退避 + 尊重 disable
-- [ ] 3.4 Health loop：TCP / HTTP，failureThreshold
-- [ ] 3.5 Watch loop：多路径 FileSystemWatcher + debounce + targets 分发
-- [ ] 3.6 本地 HTTP API（§6.2）最小实现（可先无托盘）
-- [ ] 3.7 用注册面把自己注册为 `win-autostart-manager` 的脚本/文档
-- [ ] 3.8 测试：模拟端口失败触发重启；摸文件触发 restart；disable 后不重启
+- [x] 3.1 `_manager` 目录与 `manager.json` / `watches.json` / `state.json` 契约
+- [x] 3.2 清单聚合服务（复用 list）
+- [x] 3.3 重启管线：`restart` + 冷却 + 退避 + 尊重 disable
+- [x] 3.4 Health loop：TCP / HTTP，failureThreshold
+- [x] 3.5 Watch loop：多路径 FileSystemWatcher + debounce + targets 分发
+- [x] 3.6 本地 HTTP API（§6.2）最小实现（可先无托盘）
+- [x] 3.7 用注册面把自己注册为 `win-autostart-manager` 的脚本/文档
+- [x] 3.8 测试：模拟端口失败触发重启；摸文件触发 restart；disable 后不重启
 
 **阶段出口**：无浏览器也能 curl API 完成健康与热重载。
 

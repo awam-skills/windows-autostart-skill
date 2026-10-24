@@ -159,12 +159,61 @@ Registration plane CLI now includes inventory/control helpers. A **control plane
 
 Never invent package-local `*-watchdog.vbs` as the recommended keepalive path (Manager Phase 3+).
 
+## Manager Core (Phase 3)
+
+Control-plane console host (no tray UI yet): `win-autostart-manager.ps1` + `manager/` modules.
+
+Config under `~\.win-autostart\_manager\`:
+- `manager.json` — schema `windows-autostart-manager/1` (listen `127.0.0.1`, port `18765`, cooldown/backoff, optional `token`)
+- `watches.json` — schema `windows-autostart-watches/1` (debounceMs + items[])
+- `state.json` — shared with CLI; manager merges runtime fields (`consecutiveHealthFailures`, `lastRestartAt`, `lastHealthOkAt`, `lastWatchFireAt`) without wiping `desiredEnabled`
+- `manager.log` — append-only control-plane log
+
+### Run
+
+```powershell
+# Ensure defaults
+powershell -NoProfile -ExecutionPolicy Bypass -File "$SKILL_DIR\win-autostart-manager.ps1" init
+
+# Serve (HTTP + health + watches) until Ctrl+C or _manager\STOP
+powershell -NoProfile -ExecutionPolicy Bypass -File "$SKILL_DIR\win-autostart-manager.ps1" serve
+
+# Optional: -DryRun / env WIN_AUTOSTART_MANAGER_DRYRUN=1 → restart intents to test-restarts.jsonl
+# Optional: once-health / once-watch for tests
+```
+
+Self-register at logon (scheduled-task; **no silent Startup fallback** — ADR-0003):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$SKILL_DIR\register-manager.ps1"
+```
+
+### HTTP API smoke (`127.0.0.1` only)
+
+```bash
+curl -s http://127.0.0.1:18765/api/v1/health
+curl -s http://127.0.0.1:18765/api/v1/entries
+curl -s -X POST http://127.0.0.1:18765/api/v1/entries/<name>/restart
+curl -s http://127.0.0.1:18765/api/v1/watches
+```
+
+If `manager.json` sets `token`, send header `X-Win-Autostart-Token: <token>`.
+
+### Tests
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$SKILL_DIR\tests-manager.ps1"
+```
+
+Health/watch respect `desiredEnabled=false` (skip restart). Prefer Manager over package-local `*-watchdog.vbs`.
+
 ## Out of scope
 
 No Service, no all-users / HKLM / Public Startup, no default elevation.
 Registration CLI does not daemonize; continuous health/watch belongs to the
-future control plane (ADR-0005). Today `status` is a snapshot. Mutating
-actions go only through the CLI.
+Manager Core (Phase 3; ADR-0005). `status` remains a snapshot; continuous
+health/watch run in `win-autostart-manager.ps1`. Mutating registration
+actions still go through the CLI (or Manager HTTP which calls the CLI).
 
 ## Verified Gotchas
 
