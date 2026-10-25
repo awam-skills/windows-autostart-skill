@@ -336,6 +336,7 @@ function Write-Manifest {
         root         = $RootPath
         createdAt    = (Get-Date).ToString('o')
         keepalive    = (Get-DefaultKeepalive -Landing $Landing)
+        exposedPorts = @()
     }
     $manifestPath = Join-Path $RootPath ($Name + '.json')
     ($m | ConvertTo-Json -Depth 8) | Set-Content -Path $manifestPath -Encoding UTF8

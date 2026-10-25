@@ -111,6 +111,15 @@ th, td { padding: 0.65rem 0.75rem; text-align: left; border-bottom: 1px solid va
 th { color: var(--muted); font-weight: 600; font-size: 0.8rem; }
 tr:last-child td { border-bottom: none; }
 .actions { white-space: nowrap; }
+.ports-cell { white-space: nowrap; }
+.port-link {
+  color: #93c5fd;
+  text-decoration: none;
+  margin-right: 0.35rem;
+  font-variant-numeric: tabular-nums;
+}
+.port-link:hover { text-decoration: underline; color: #bfdbfe; }
+.port-link:last-child { margin-right: 0; }
 .card {
   margin-top: 1rem;
   background: var(--panel);

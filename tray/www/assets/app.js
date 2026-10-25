@@ -82,6 +82,7 @@
         '<td>' + escapeHtml(e.landing || '') + '</td>' +
         '<td>' + escapeHtml(e.mode || '') + '</td>' +
         '<td>' + (enabled === true ? '是' : enabled === false ? '否' : '—') + '</td>' +
+        '<td class="ports-cell">' + formatExposedPortsHtml(e.exposedPorts) + '</td>' +
         '<td>' + msText + '</td>' +
         '<td class="actions"></td>';
       var actions = tr.querySelector('.actions');
@@ -131,6 +132,25 @@
     return String(s).replace(/[&<>"']/g, function (c) {
       return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
     });
+  }
+
+  function normalizePortsList(raw) {
+    if (Array.isArray(raw)) {
+      return raw.map(function (x) { return parseInt(x, 10); }).filter(function (n) {
+        return !isNaN(n) && n >= 1 && n <= 65535;
+      });
+    }
+    if (raw == null || raw === '') return [];
+    var n = parseInt(raw, 10);
+    return (!isNaN(n) && n >= 1 && n <= 65535) ? [n] : [];
+  }
+
+  function formatExposedPortsHtml(raw) {
+    var ports = normalizePortsList(raw);
+    if (!ports.length) return '—';
+    return ports.map(function (p) {
+      return '<a class="port-link" href="http://127.0.0.1:' + p + '/" target="_blank" rel="noopener noreferrer">' + p + '</a>';
+    }).join(' ');
   }
 
   function formatManagerStatus(ms, name) {
@@ -208,16 +228,52 @@
     $('detailJson').textContent = '加载中…';
     Promise.all([
       api('/entries/' + encodeURIComponent(name)),
-      api('/entries/' + encodeURIComponent(name) + '/keepalive')
+      api('/entries/' + encodeURIComponent(name) + '/keepalive'),
+      api('/entries/' + encodeURIComponent(name) + '/ports')
     ]).then(function (pair) {
       var st = pair[0];
       var ka = pair[1];
+      var ports = pair[2];
       fillSummary(st, ka);
       $('detailJson').textContent = JSON.stringify(st, null, 2);
       fillKeepalive(ka.keepalive || {});
+      fillExposedPorts(ports.exposedPorts);
       $('kaSaveMsg').textContent = '';
+      $('portsSaveMsg').textContent = '';
     }).catch(function (e) {
       $('detailJson').textContent = '错误: ' + (e.message || e);
+    });
+  }
+
+  function fillExposedPorts(raw) {
+    var ports = normalizePortsList(raw);
+    $('exposedPortsInput').value = ports.length ? ports.join(',') : '';
+  }
+
+  function saveExposedPorts(ev) {
+    ev.preventDefault();
+    var name = $('detailSelect').value;
+    if (!name) return;
+    var ports = String($('exposedPortsInput').value || '').split(/[,;\s]+/).filter(Boolean).map(function (x) {
+      return parseInt(x, 10);
+    }).filter(function (n) { return !isNaN(n) && n >= 1 && n <= 65535; });
+    // 去重保持输入顺序后由服务端升序规范化
+    var seen = {};
+    ports = ports.filter(function (n) {
+      if (seen[n]) return false;
+      seen[n] = true;
+      return true;
+    });
+    api('/entries/' + encodeURIComponent(name) + '/ports', {
+      method: 'PUT',
+      body: { exposedPorts: ports }
+    }).then(function () {
+      $('portsSaveMsg').className = 'msg';
+      $('portsSaveMsg').textContent = '已保存';
+      return Promise.all([loadDetail(), loadEntries()]);
+    }).catch(function (e) {
+      $('portsSaveMsg').className = 'msg err';
+      $('portsSaveMsg').textContent = e.message || String(e);
     });
   }
 
@@ -360,6 +416,7 @@
   $('btnLoadDetail').addEventListener('click', loadDetail);
   $('detailSelect').addEventListener('change', loadDetail);
   $('keepaliveForm').addEventListener('submit', saveKeepalive);
+  $('portsForm').addEventListener('submit', saveExposedPorts);
   $('watchForm').addEventListener('submit', addWatch);
   $('btnPause').addEventListener('click', function () {
     api('/pause', { method: 'POST' }).then(refreshHealth).catch(function (e) { setErr(e.message); });

@@ -40,6 +40,7 @@
               <th>落点</th>
               <th>模式</th>
               <th>启用</th>
+              <th>端口</th>
               <th>管理状态</th>
               <th>操作</th>
             </tr>
@@ -76,6 +77,17 @@
       <div id="detailStatus" class="card">
         <h3>原始状态 JSON</h3>
         <pre id="detailJson">（请选择条目或从清单点名称）</pre>
+      </div>
+      <div class="card">
+        <h3>暴露端口 exposedPorts</h3>
+        <p class="hint">与健康探针 tcpPorts 独立。清单中显示为可点击的本机链接（新标签打开 http://127.0.0.1:&lt;端口&gt;/）。</p>
+        <form id="portsForm" class="form-grid">
+          <label>端口（逗号分隔） <input type="text" id="exposedPortsInput" placeholder="4000, 8080" /></label>
+          <div class="form-actions">
+            <button type="submit" class="btn">保存暴露端口</button>
+            <span id="portsSaveMsg" class="msg"></span>
+          </div>
+        </form>
       </div>
       <div class="card">
         <h3>保活配置 keepalive</h3>

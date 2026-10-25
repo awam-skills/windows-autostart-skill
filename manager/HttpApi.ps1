@@ -127,6 +127,8 @@ function Invoke-ApiHandler {
                         $row = [ordered]@{}
                         foreach ($k in @($em.Keys)) { $row[$k] = $em[$k] }
                         $row['managerState'] = $st
+                        $portsInfo = Read-EntryExposedPorts -PackagesRoot $PackagesRoot -Name $name
+                        $row['exposedPorts'] = @($portsInfo.exposedPorts)
                         $enriched.Add($row)
                     }
                     Send-ApiJson -Response $Response -StatusCode 200 -Body @{
@@ -154,6 +156,12 @@ function Invoke-ApiHandler {
 
                 if ($action -eq 'keepalive') {
                     Invoke-KeepaliveApi -Method $method -Name $name -Request $Request -Response $Response `
+                        -PackagesRoot $PackagesRoot -ManagerRoot $ManagerRoot
+                    return
+                }
+
+                if ($action -eq 'ports') {
+                    Invoke-PortsApi -Method $method -Name $name -Request $Request -Response $Response `
                         -PackagesRoot $PackagesRoot -ManagerRoot $ManagerRoot
                     return
                 }
@@ -472,7 +480,7 @@ function Write-EntryKeepalive {
     }
 
     $ordered = [ordered]@{}
-    foreach ($k in @('schema', 'name', 'command', 'workdir', 'mode', 'landing', 'elevated', 'root', 'createdAt', 'keepalive')) {
+    foreach ($k in @('schema', 'name', 'command', 'workdir', 'mode', 'landing', 'elevated', 'root', 'createdAt', 'keepalive', 'exposedPorts')) {
         if ($map.ContainsKey($k)) { $ordered[$k] = $map[$k] }
     }
     foreach ($k in @($map.Keys | Sort-Object)) {
@@ -480,6 +488,138 @@ function Write-EntryKeepalive {
     }
     Write-JsonFile -Path $path -Doc $ordered -Depth 12
     return @{ ok = $true; error = $null; keepalive = $ka; path = $path }
+}
+
+function Normalize-ExposedPorts {
+    <# 校验为 1–65535 的整数，去重后升序。非法项忽略。 #>
+    param($Raw)
+    $seen = @{}
+    $list = New-Object System.Collections.Generic.List[int]
+    if ($null -eq $Raw) {
+        return ,[int[]]@()
+    }
+    $items = @()
+    if ($Raw -is [System.Array]) { $items = @($Raw) }
+    elseif ("$Raw" -ne '') { $items = @($Raw) }
+    foreach ($x in $items) {
+        $n = 0
+        if (-not [int]::TryParse([string]$x, [ref]$n)) { continue }
+        if ($n -lt 1 -or $n -gt 65535) { continue }
+        if ($seen.ContainsKey($n)) { continue }
+        $seen[$n] = $true
+        $list.Add($n)
+    }
+    if ($list.Count -eq 0) {
+        return ,[int[]]@()
+    }
+    return ,[int[]]@($list | Sort-Object)
+}
+
+function Read-EntryExposedPorts {
+    param([string]$PackagesRoot, [string]$Name)
+    $manifest = Read-EntryManifestForManager -PackagesRoot $PackagesRoot -Name $Name
+    if ($null -eq $manifest) {
+        return @{ ok = $false; error = 'entry_not_found'; exposedPorts = ,[int[]]@(); path = $null }
+    }
+    $raw = $null
+    if ($manifest.PSObject.Properties.Name -contains 'exposedPorts') {
+        $raw = $manifest.exposedPorts
+    }
+    $ports = Normalize-ExposedPorts -Raw $raw
+    $path = Get-EntryManifestPath -PackagesRoot $PackagesRoot -Name $Name
+    return @{ ok = $true; error = $null; exposedPorts = $ports; path = $path }
+}
+
+function Write-EntryExposedPorts {
+    param([string]$PackagesRoot, [string]$Name, $PortsBody)
+    $path = Get-EntryManifestPath -PackagesRoot $PackagesRoot -Name $Name
+    if (-not (Test-Path -Path $path -PathType Leaf)) {
+        return @{ ok = $false; error = 'entry_not_found'; exposedPorts = ,[int[]]@(); path = $null }
+    }
+    $raw = Get-Content -Path $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $map = ConvertTo-PlainMap $raw
+    $incoming = $PortsBody
+    if ($PortsBody -is [hashtable] -or $PortsBody -is [System.Collections.IDictionary]) {
+        $incoming = ConvertTo-PlainMap $PortsBody
+        if ($incoming.ContainsKey('exposedPorts')) { $incoming = $incoming['exposedPorts'] }
+    }
+    elseif ($null -ne $PortsBody -and ($PortsBody.PSObject.Properties.Name -contains 'exposedPorts')) {
+        $incoming = $PortsBody.exposedPorts
+    }
+    $ports = Normalize-ExposedPorts -Raw $incoming
+    $map['exposedPorts'] = @($ports)
+    if (-not $map.ContainsKey('schema') -or -not $map['schema']) {
+        $map['schema'] = 'windows-autostart/2'
+    }
+    elseif ([string]$map['schema'] -eq 'windows-autostart/1') {
+        $map['schema'] = 'windows-autostart/2'
+    }
+    $ordered = [ordered]@{}
+    foreach ($k in @('schema', 'name', 'command', 'workdir', 'mode', 'landing', 'elevated', 'root', 'createdAt', 'keepalive', 'exposedPorts')) {
+        if ($map.ContainsKey($k)) { $ordered[$k] = $map[$k] }
+    }
+    foreach ($k in @($map.Keys | Sort-Object)) {
+        if (-not $ordered.Contains($k)) { $ordered[$k] = $map[$k] }
+    }
+    Write-JsonFile -Path $path -Doc $ordered -Depth 12
+    return @{ ok = $true; error = $null; exposedPorts = $ports; path = $path }
+}
+
+function Invoke-PortsApi {
+    param(
+        [string]$Method,
+        [string]$Name,
+        $Request,
+        $Response,
+        [string]$PackagesRoot,
+        [string]$ManagerRoot
+    )
+    if ($Method -eq 'GET') {
+        $r = Read-EntryExposedPorts -PackagesRoot $PackagesRoot -Name $Name
+        if (-not $r.ok) {
+            Send-ApiJson -Response $Response -StatusCode 404 -Body @{ ok = $false; error = $r.error }
+            return
+        }
+        Send-ApiJson -Response $Response -StatusCode 200 -Body @{
+            ok           = $true
+            name         = $Name
+            exposedPorts = @($r.exposedPorts)
+            path         = $r.path
+        }
+        return
+    }
+    if ($Method -eq 'PUT') {
+        $bodyText = Read-RequestBodyText -Request $Request
+        if (-not $bodyText) {
+            Send-ApiJson -Response $Response -StatusCode 400 -Body @{ ok = $false; error = 'empty_body' }
+            return
+        }
+        try {
+            $incoming = $bodyText | ConvertFrom-Json
+        }
+        catch {
+            Send-ApiJson -Response $Response -StatusCode 400 -Body @{ ok = $false; error = 'invalid_json' }
+            return
+        }
+        if ($null -eq $incoming -or -not ($incoming.PSObject.Properties.Name -contains 'exposedPorts')) {
+            Send-ApiJson -Response $Response -StatusCode 400 -Body @{ ok = $false; error = 'missing_exposedPorts' }
+            return
+        }
+        $w = Write-EntryExposedPorts -PackagesRoot $PackagesRoot -Name $Name -PortsBody $incoming
+        if (-not $w.ok) {
+            Send-ApiJson -Response $Response -StatusCode 404 -Body @{ ok = $false; error = $w.error }
+            return
+        }
+        Write-ManagerLog -ManagerRoot $ManagerRoot -Level 'INFO' -Message ("exposedPorts updated for '{0}'" -f $Name)
+        Send-ApiJson -Response $Response -StatusCode 200 -Body @{
+            ok           = $true
+            name         = $Name
+            exposedPorts = @($w.exposedPorts)
+            path         = $w.path
+        }
+        return
+    }
+    Send-ApiJson -Response $Response -StatusCode 405 -Body @{ ok = $false; error = 'method_not_allowed' }
 }
 
 function Invoke-KeepaliveApi {
@@ -643,6 +783,8 @@ function Get-ManagerApiRouteTable {
         @{ Method = 'POST'; Path = '/api/v1/entries/{name}/disable' }
         @{ Method = 'GET';  Path = '/api/v1/entries/{name}/keepalive' }
         @{ Method = 'PUT';  Path = '/api/v1/entries/{name}/keepalive' }
+        @{ Method = 'GET';  Path = '/api/v1/entries/{name}/ports' }
+        @{ Method = 'PUT';  Path = '/api/v1/entries/{name}/ports' }
         @{ Method = 'GET';  Path = '/api/v1/watches' }
         @{ Method = 'PUT';  Path = '/api/v1/watches' }
         @{ Method = 'POST'; Path = '/api/v1/watches' }

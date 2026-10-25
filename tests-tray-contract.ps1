@@ -77,10 +77,15 @@ try {
     $routes = Get-ManagerApiRouteTable
     $paths = @($routes | ForEach-Object { $_.Path })
     Assert-True -Condition ($paths -contains '/api/v1/entries/{name}/keepalive') -Name 'API route keepalive GET/PUT listed'
+    Assert-True -Condition ($paths -contains '/api/v1/entries/{name}/ports') -Name 'API route ports GET/PUT listed'
     Assert-True -Condition ($paths -contains '/api/v1/pause') -Name 'API route pause listed'
     $httpSrc = Get-Content -Path (Join-Path $script:TestRoot 'manager/HttpApi.ps1') -Raw -Encoding UTF8
     Assert-True -Condition ($httpSrc -match 'Invoke-KeepaliveApi|Write-EntryKeepalive') -Name 'HttpApi defines keepalive helpers'
+    Assert-True -Condition ($httpSrc -match 'Invoke-PortsApi|Write-EntryExposedPorts') -Name 'HttpApi defines ports helpers'
     Assert-True -Condition ($httpSrc -match 'Send-StaticWwwFile') -Name 'HttpApi serves static www'
+    $appSrc = Get-Content -Path (Join-Path $script:TestRoot 'tray/www/assets/app.js') -Raw -Encoding UTF8
+    Assert-True -Condition ($appSrc -match 'formatExposedPortsHtml|port-link') -Name 'panel JS renders exposed port links'
+    Assert-True -Condition ($indexSrc -match 'exposedPortsInput|portsForm') -Name 'index.html has exposed ports form'
 
     # --- keepalive read/write on fake manifest ---
     $entryName = 'ka-entry'
@@ -111,6 +116,22 @@ try {
     Assert-True -Condition ([bool]$proc['enabled'] -eq $true) -Name 'keepalive process.enabled persisted'
     $health = ConvertTo-PlainMap $r2.keepalive.health
     Assert-True -Condition ([int]$health['intervalSec'] -eq 15) -Name 'keepalive health.intervalSec persisted'
+
+    # --- exposedPorts read/write (independent of health.tcpPorts) ---
+    $pr0 = Read-EntryExposedPorts -PackagesRoot $pkgRoot -Name $entryName
+    Assert-True -Condition ([bool]$pr0.ok) -Name 'Read-EntryExposedPorts ok when missing'
+    Assert-True -Condition (@($pr0.exposedPorts).Count -eq 0) -Name 'missing exposedPorts defaults to empty'
+    $pw = Write-EntryExposedPorts -PackagesRoot $pkgRoot -Name $entryName -PortsBody @{
+        exposedPorts = @(8080, 4000, 4000, 99999, -1, 'abc')
+    }
+    Assert-True -Condition ([bool]$pw.ok) -Name 'Write-EntryExposedPorts ok'
+    $pr1 = Read-EntryExposedPorts -PackagesRoot $pkgRoot -Name $entryName
+    $gotPorts = @($pr1.exposedPorts)
+    Assert-True -Condition ($gotPorts.Count -eq 2 -and [int]$gotPorts[0] -eq 4000 -and [int]$gotPorts[1] -eq 8080) -Name 'exposedPorts normalized dedupe+sort 1-65535'
+    $rKaAfterPorts = Read-EntryKeepalive -PackagesRoot $pkgRoot -Name $entryName
+    $healthAfter = ConvertTo-PlainMap $rKaAfterPorts.keepalive.health
+    $tcpAfter = @($healthAfter['tcpPorts'])
+    Assert-True -Condition ($tcpAfter.Count -eq 1 -and [int]$tcpAfter[0] -eq 4010) -Name 'writing exposedPorts does not clobber health.tcpPorts'
 
     # --- PAUSE skips health restarts ---
     $null = Update-ManagerEntryState -ManagerRoot $mgrRoot -Name $entryName -Fields @{
