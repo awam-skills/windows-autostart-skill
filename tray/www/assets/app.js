@@ -20,6 +20,9 @@
       return r.json().then(function (j) {
         if (!r.ok) {
           var err = (j && j.error) || ('HTTP ' + r.status);
+          if (j && Array.isArray(j.conflicts) && j.conflicts.length) {
+            err = formatConflictsMessage(j.conflicts) || err;
+          }
           throw new Error(err);
         }
         return j;
@@ -151,6 +154,23 @@
     return ports.map(function (p) {
       return '<a class="port-link" href="http://127.0.0.1:' + p + '/" target="_blank" rel="noopener noreferrer">' + p + '</a>';
     }).join(' ');
+  }
+
+  function formatConflictsMessage(conflicts) {
+    if (!Array.isArray(conflicts) || !conflicts.length) return '';
+    var parts = conflicts.map(function (c) {
+      var port = c && c.port != null ? c.port : '?';
+      if (c && c.kind === 'declared') {
+        return '端口 ' + port + ' 已被 ' + (c.entry || '?') + ' 声明（' + (c.source || '?') + '）';
+      }
+      if (c && c.kind === 'listen') {
+        var who = 'PID ' + (c.pid != null ? c.pid : '?');
+        if (c.processName) who += ', ' + c.processName;
+        return '端口 ' + port + ' 已被本机进程占用（' + who + '），且无法确认为本条目';
+      }
+      return '端口 ' + port + ' 冲突';
+    });
+    return '端口冲突：' + parts.join('；');
   }
 
   function formatManagerStatus(ms, name) {

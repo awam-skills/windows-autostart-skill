@@ -503,7 +503,7 @@ function Write-EntryKeepalive {
 }
 
 function Normalize-ExposedPorts {
-    <# 校验为 1–65535 的整数，去重后升序。非法项忽略。 #>
+    <# Normalize to unique ints in 1-65535, ascending. Invalid items dropped. #>
     param($Raw)
     $seen = @{}
     $list = New-Object System.Collections.Generic.List[int]
@@ -525,6 +525,345 @@ function Normalize-ExposedPorts {
         return ,[int[]]@()
     }
     return ,[int[]]@($list | Sort-Object)
+}
+
+function ConvertTo-IntPortArray {
+    <# Unwrap Normalize-ExposedPorts unary-comma result without nesting via @(). #>
+    param($Raw)
+    $n = Normalize-ExposedPorts -Raw $Raw
+    if ($null -eq $n) { return ,[int[]]@() }
+    if ($n -is [int[]]) { return ,$n }
+    if ($n -is [System.Array]) {
+        $tmp = New-Object System.Collections.Generic.List[int]
+        foreach ($x in $n) { $tmp.Add([int]$x) }
+        if ($tmp.Count -eq 0) { return ,[int[]]@() }
+        return ,[int[]]@($tmp.ToArray())
+    }
+    return ,[int[]]@([int]$n)
+}
+
+function Get-ManifestDeclaredPortClaims {
+    <# Collect exposedPorts + health.tcpPorts claims from a manifest. #>
+    param($Manifest, [string]$Name)
+    $claims = New-Object System.Collections.Generic.List[object]
+    if ($null -eq $Manifest) { return @() }
+    if ($Manifest.PSObject.Properties.Name -contains 'exposedPorts') {
+        $eps = ConvertTo-IntPortArray -Raw $Manifest.exposedPorts
+        foreach ($p in $eps) {
+            $claims.Add([ordered]@{ port = [int]$p; entry = $Name; source = 'exposedPorts' })
+        }
+    }
+    if (($Manifest.PSObject.Properties.Name -contains 'keepalive') -and $Manifest.keepalive) {
+        $ka = $Manifest.keepalive
+        if (($ka.PSObject.Properties.Name -contains 'health') -and $ka.health) {
+            $h = $ka.health
+            if (($h.PSObject.Properties.Name -contains 'tcpPorts') -and $null -ne $h.tcpPorts) {
+                $tps = ConvertTo-IntPortArray -Raw $h.tcpPorts
+                foreach ($p in $tps) {
+                    $claims.Add([ordered]@{ port = [int]$p; entry = $Name; source = 'health.tcpPorts' })
+                }
+            }
+        }
+    }
+    return @($claims.ToArray())
+}
+
+function Get-ForeignPortClaimIndex {
+    <#
+      Port claim index for other entries: port -> @(claim...).
+      Includes manager.json listen port (owner win-autostart-manager / manager.listen).
+    #>
+    param(
+        [string]$PackagesRoot,
+        [string]$ExcludeName,
+        [string]$ManagerRoot
+    )
+    $index = @{}
+    if ($PackagesRoot -and (Test-Path -Path $PackagesRoot -PathType Container)) {
+        foreach ($d in @(Get-ChildItem -Path $PackagesRoot -Directory -ErrorAction SilentlyContinue)) {
+            $n = $d.Name
+            if ($n -eq '_manager') { continue }
+            if ($ExcludeName -and ($n -eq $ExcludeName)) { continue }
+            $mf = Read-EntryManifestForManager -PackagesRoot $PackagesRoot -Name $n
+            if ($null -eq $mf) { continue }
+            foreach ($c in @(Get-ManifestDeclaredPortClaims -Manifest $mf -Name $n)) {
+                $p = [int]$c['port']
+                if (-not $index.ContainsKey($p)) { $index[$p] = New-Object System.Collections.Generic.List[object] }
+                $index[$p].Add($c)
+            }
+        }
+    }
+    if ($ManagerRoot) {
+        try {
+            $cfg = Read-ManagerConfig -ManagerRoot $ManagerRoot
+            $mgrPort = [int]$cfg['port']
+            if ($mgrPort -ge 1 -and $mgrPort -le 65535) {
+                $owner = 'win-autostart-manager'
+                if (-not ($ExcludeName -and ($ExcludeName -eq $owner))) {
+                    if (-not $index.ContainsKey($mgrPort)) {
+                        $index[$mgrPort] = New-Object System.Collections.Generic.List[object]
+                    }
+                    $already = $false
+                    # PS 5.1: do not wrap List[object] with @() — "Argument types do not match"
+                    foreach ($ex in $index[$mgrPort]) {
+                        if ([string]$ex['entry'] -eq $owner) { $already = $true; break }
+                    }
+                    if (-not $already) {
+                        $index[$mgrPort].Add([ordered]@{
+                            port   = $mgrPort
+                            entry  = $owner
+                            source = 'manager.listen'
+                        })
+                    }
+                }
+            }
+        }
+        catch { }
+    }
+    return $index
+}
+
+function Get-EntryPortOwnerHints {
+    <# Hints to decide if a Listen owner belongs to this entry (process + command paths). #>
+    param($Manifest, [string]$Name, [string]$PackagesRoot)
+    $imageNames = New-Object System.Collections.Generic.List[string]
+    $markers = New-Object System.Collections.Generic.List[string]
+    if ($Name) { $markers.Add($Name) }
+    $pkgRoot = $null
+    if ($PackagesRoot -and $Name) {
+        $pkgRoot = Join-Path $PackagesRoot $Name
+        if ($pkgRoot) { $markers.Add($pkgRoot) }
+    }
+    if ($null -ne $Manifest) {
+        if (($Manifest.PSObject.Properties.Name -contains 'keepalive') -and $Manifest.keepalive) {
+            $proc = $Manifest.keepalive.process
+            if ($proc) {
+                if (($proc.PSObject.Properties.Name -contains 'imageName') -and $proc.imageName) {
+                    $img = [string]$proc.imageName
+                    $imageNames.Add($img)
+                    $leaf = [System.IO.Path]::GetFileName($img)
+                    if ($leaf) { $imageNames.Add($leaf) }
+                    $base = [System.IO.Path]::GetFileNameWithoutExtension($img)
+                    if ($base) { $imageNames.Add($base) }
+                }
+                if (($proc.PSObject.Properties.Name -contains 'commandLineContains') -and $proc.commandLineContains) {
+                    $markers.Add([string]$proc.commandLineContains)
+                }
+            }
+        }
+        if (($Manifest.PSObject.Properties.Name -contains 'workdir') -and $Manifest.workdir) {
+            $markers.Add([string]$Manifest.workdir)
+        }
+        if (($Manifest.PSObject.Properties.Name -contains 'command') -and $Manifest.command) {
+            $cmd = [string]$Manifest.command
+            $markers.Add($cmd)
+            if ($cmd -match '(?i)(?:^|[\s"])([^"\s]+?\.(?:py|ps1|js|mjs|cmd|bat|exe))(?=["\s]|$)') {
+                $markers.Add($Matches[1].Trim('"'))
+            }
+            if ($cmd -match '(?i)-File\s+"([^"]+)"') {
+                $markers.Add($Matches[1])
+            }
+            elseif ($cmd -match '(?i)-File\s+(\S+)') {
+                $markers.Add($Matches[1].Trim('"'))
+            }
+            if ($cmd -match '(?i)-m\s+(\S+)') {
+                $markers.Add($Matches[1])
+            }
+            # First executable token from command
+            $tok = ($cmd -replace '^"', '' -split '\s+')[0]
+            if ($tok) {
+                $tok = $tok.Trim('"')
+                $leaf = [System.IO.Path]::GetFileName($tok)
+                if ($leaf) { $imageNames.Add($leaf) }
+                $base = [System.IO.Path]::GetFileNameWithoutExtension($tok)
+                if ($base) { $imageNames.Add($base) }
+            }
+        }
+        if ($pkgRoot) {
+            foreach ($leafName in @(($Name + '.cmd'), ($Name + '.vbs'), ($Name + '.json'))) {
+                $markers.Add((Join-Path $pkgRoot $leafName))
+            }
+        }
+    }
+    $imgOut = @($imageNames | Where-Object { $_ -and "$_".Trim() -ne '' } | ForEach-Object { "$_".Trim() } | Select-Object -Unique)
+    $markOut = @($markers | Where-Object { $_ -and ("$_".Trim().Length -ge 3) } | ForEach-Object { "$_".Trim() } | Select-Object -Unique)
+    return @{
+        imageNames = $imgOut
+        markers    = $markOut
+    }
+}
+
+function Get-LocalPortListeners {
+    <# Listeners on any local address for this port (incl 0.0.0.0 / ::). Hook: PortListenProbeHook. #>
+    param([int]$Port)
+    if ($script:PortListenProbeHook -is [scriptblock]) {
+        $hooked = & $script:PortListenProbeHook -Port $Port
+        if ($null -eq $hooked) { return @() }
+        return @($hooked)
+    }
+    $rows = New-Object System.Collections.Generic.List[object]
+    try {
+        $conns = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+            Where-Object { [int]$_.LocalPort -eq $Port })
+    }
+    catch {
+        $conns = @()
+    }
+    $seenPid = @{}
+    foreach ($c in $conns) {
+        $procId = 0
+        try { $procId = [int]$c.OwningProcess } catch { continue }
+        if ($procId -le 0) { continue }
+        if ($seenPid.ContainsKey($procId)) { continue }
+        $seenPid[$procId] = $true
+        $procName = $null
+        $cmdLine = $null
+        try {
+            $wp = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId = {0}" -f $procId) -ErrorAction SilentlyContinue
+            if ($wp) {
+                $procName = [string]$wp.Name
+                $cmdLine = [string]$wp.CommandLine
+            }
+        }
+        catch { }
+        if (-not $procName) {
+            try {
+                $gp = Get-Process -Id $procId -ErrorAction SilentlyContinue
+                if ($gp) { $procName = [string]$gp.ProcessName + '.exe' }
+            }
+            catch { }
+        }
+        $rows.Add([ordered]@{
+            pid          = $procId
+            processName  = $procName
+            commandLine  = $cmdLine
+            localAddress = [string]$c.LocalAddress
+        })
+    }
+    return @($rows.ToArray())
+}
+
+function Test-ListenerBelongsToEntry {
+    param(
+        $Listener,
+        $Hints
+    )
+    if ($null -eq $Listener -or $null -eq $Hints) { return $false }
+    $pn = [string]$Listener['processName']
+    if (-not $pn) { $pn = [string]$Listener.processName }
+    $cl = [string]$Listener['commandLine']
+    if (-not $cl) { $cl = [string]$Listener.commandLine }
+
+    $markers = @($Hints['markers'])
+    if ($markers.Count -eq 0) { $markers = @($Hints.markers) }
+    foreach ($m in $markers) {
+        if (-not $m) { continue }
+        if ($cl -and ($cl.IndexOf([string]$m, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)) {
+            return $true
+        }
+    }
+
+    $images = @($Hints['imageNames'])
+    if ($images.Count -eq 0) { $images = @($Hints.imageNames) }
+    $imgHit = $false
+    foreach ($img in $images) {
+        if (-not $img -or -not $pn) { continue }
+        if ($pn -ieq $img) { $imgHit = $true; break }
+        if ($pn -ieq ($img + '.exe')) { $imgHit = $true; break }
+        $base = [System.IO.Path]::GetFileNameWithoutExtension($img)
+        $pnBase = [System.IO.Path]::GetFileNameWithoutExtension($pn)
+        if ($base -and $pnBase -and ($base -ieq $pnBase)) { $imgHit = $true; break }
+    }
+    if (-not $imgHit) { return $false }
+    # Image-only hit: allow if no cmdline; if cmdline present require a marker (avoid python/node false self)
+    if (-not $cl) { return $true }
+    if ($markers.Count -eq 0) { return $true }
+    return $false
+}
+
+function Format-PortConflictsError {
+    <# ASCII-only for PS 5.1 script encoding safety; UI formats Chinese from conflicts[]. #>
+    param([object[]]$Conflicts)
+    $parts = New-Object System.Collections.Generic.List[string]
+    foreach ($c in @($Conflicts)) {
+        $kind = [string]$c['kind']
+        $port = [int]$c['port']
+        if ($kind -eq 'declared') {
+            $parts.Add(('port {0} claimed by {1} ({2})' -f $port, $c['entry'], $c['source']))
+        }
+        elseif ($kind -eq 'listen') {
+            $who = ('PID {0}' -f $c['pid'])
+            if ($c['processName']) { $who = $who + (', {0}' -f $c['processName']) }
+            $parts.Add(('port {0} in use by local process ({1}), not matched to this entry' -f $port, $who))
+        }
+        else {
+            $parts.Add(('port {0} conflict' -f $port))
+        }
+    }
+    if ($parts.Count -eq 0) { return 'port conflict' }
+    return ('port conflict: ' + ($parts -join '; '))
+}
+
+function Test-ProposedPortsConflicts {
+    <#
+      Conflict check for proposed ports:
+      1) vs other entries' exposedPorts / health.tcpPorts (and manager.listen) -> reject
+      2) vs local Listen on any address without self-match -> reject
+      Self Listen ownership -> allow
+    #>
+    param(
+        [string]$PackagesRoot,
+        [string]$ManagerRoot,
+        [string]$Name,
+        [int[]]$ProposedPorts,
+        $Manifest
+    )
+    $conflicts = New-Object System.Collections.Generic.List[object]
+    $ports = ConvertTo-IntPortArray -Raw $ProposedPorts
+    if ($null -eq $ports -or $ports.Count -eq 0) {
+        return @{ ok = $true; conflicts = @(); error = $null }
+    }
+    $foreign = Get-ForeignPortClaimIndex -PackagesRoot $PackagesRoot -ExcludeName $Name -ManagerRoot $ManagerRoot
+    $hints = Get-EntryPortOwnerHints -Manifest $Manifest -Name $Name -PackagesRoot $PackagesRoot
+    foreach ($p in $ports) {
+        if ($foreign.ContainsKey([int]$p)) {
+            # PS 5.1: do not wrap List[object] with @() — "Argument types do not match"
+            foreach ($claim in $foreign[[int]$p]) {
+                $conflicts.Add([ordered]@{
+                    kind   = 'declared'
+                    port   = [int]$p
+                    entry  = [string]$claim['entry']
+                    source = [string]$claim['source']
+                })
+            }
+            continue
+        }
+        $listeners = @(Get-LocalPortListeners -Port ([int]$p))
+        if ($listeners.Count -eq 0) { continue }
+        $allSelf = $true
+        foreach ($lis in $listeners) {
+            if (-not (Test-ListenerBelongsToEntry -Listener $lis -Hints $hints)) {
+                $allSelf = $false
+                $conflicts.Add([ordered]@{
+                    kind        = 'listen'
+                    port        = [int]$p
+                    pid         = [int]$lis['pid']
+                    processName = [string]$lis['processName']
+                    commandLine = [string]$lis['commandLine']
+                })
+            }
+        }
+        if ($allSelf) { continue }
+    }
+    if ($conflicts.Count -eq 0) {
+        return @{ ok = $true; conflicts = @(); error = $null }
+    }
+    $arr = @($conflicts.ToArray())
+    return @{
+        ok        = $false
+        conflicts = $arr
+        error     = (Format-PortConflictsError -Conflicts $arr)
+    }
 }
 
 function Read-EntryExposedPorts {
@@ -617,6 +956,22 @@ function Invoke-PortsApi {
             Send-ApiJson -Response $Response -StatusCode 400 -Body @{ ok = $false; error = 'missing_exposedPorts' }
             return
         }
+        $proposed = ConvertTo-IntPortArray -Raw $incoming.exposedPorts
+        $manifest = Read-EntryManifestForManager -PackagesRoot $PackagesRoot -Name $Name
+        if ($null -eq $manifest) {
+            Send-ApiJson -Response $Response -StatusCode 404 -Body @{ ok = $false; error = 'entry_not_found' }
+            return
+        }
+        $chk = Test-ProposedPortsConflicts -PackagesRoot $PackagesRoot -ManagerRoot $ManagerRoot `
+            -Name $Name -ProposedPorts $proposed -Manifest $manifest
+        if (-not $chk.ok) {
+            Send-ApiJson -Response $Response -StatusCode 409 -Body @{
+                ok        = $false
+                error     = $chk.error
+                conflicts = @($chk.conflicts)
+            }
+            return
+        }
         $w = Write-EntryExposedPorts -PackagesRoot $PackagesRoot -Name $Name -PortsBody $incoming
         if (-not $w.ok) {
             Send-ApiJson -Response $Response -StatusCode 404 -Body @{ ok = $false; error = $w.error }
@@ -675,6 +1030,32 @@ function Invoke-KeepaliveApi {
         $kaBody = $incoming
         if ($incoming.PSObject.Properties.Name -contains 'keepalive' -and $null -ne $incoming.keepalive) {
             $kaBody = $incoming.keepalive
+        }
+        $manifest = Read-EntryManifestForManager -PackagesRoot $PackagesRoot -Name $Name
+        if ($null -eq $manifest) {
+            Send-ApiJson -Response $Response -StatusCode 404 -Body @{ ok = $false; error = 'entry_not_found' }
+            return
+        }
+        # Proposed health.tcpPorts use the same conflict rules as exposedPorts
+        $proposedTcp = @()
+        $kaMap = ConvertTo-PlainMap $kaBody
+        if ($kaMap.ContainsKey('health') -and $null -ne $kaMap['health']) {
+            $hMap = ConvertTo-PlainMap $kaMap['health']
+            if ($hMap.ContainsKey('tcpPorts')) {
+                $proposedTcp = ConvertTo-IntPortArray -Raw $hMap['tcpPorts']
+            }
+        }
+        if ($null -ne $proposedTcp -and $proposedTcp.Count -gt 0) {
+            $chk = Test-ProposedPortsConflicts -PackagesRoot $PackagesRoot -ManagerRoot $ManagerRoot `
+                -Name $Name -ProposedPorts $proposedTcp -Manifest $manifest
+            if (-not $chk.ok) {
+                Send-ApiJson -Response $Response -StatusCode 409 -Body @{
+                    ok        = $false
+                    error     = $chk.error
+                    conflicts = @($chk.conflicts)
+                }
+                return
+            }
         }
         $w = Write-EntryKeepalive -PackagesRoot $PackagesRoot -Name $Name -KeepaliveBody $kaBody
         if (-not $w.ok) {

@@ -121,6 +121,9 @@ try {
     $pr0 = Read-EntryExposedPorts -PackagesRoot $pkgRoot -Name $entryName
     Assert-True -Condition ([bool]$pr0.ok) -Name 'Read-EntryExposedPorts ok when missing'
     Assert-True -Condition (@($pr0.exposedPorts).Count -eq 0) -Name 'missing exposedPorts defaults to empty'
+    # Avoid flaky OS listeners during conflict checks
+    $script:PortListenProbeHook = { param($Port) return @() }
+
     $pw = Write-EntryExposedPorts -PackagesRoot $pkgRoot -Name $entryName -PortsBody @{
         exposedPorts = @(8080, 4000, 4000, 99999, -1, 'abc')
     }
@@ -132,6 +135,82 @@ try {
     $healthAfter = ConvertTo-PlainMap $rKaAfterPorts.keepalive.health
     $tcpAfter = @($healthAfter['tcpPorts'])
     Assert-True -Condition ($tcpAfter.Count -eq 1 -and [int]$tcpAfter[0] -eq 4010) -Name 'writing exposedPorts does not clobber health.tcpPorts'
+
+    # --- port conflict: declared by other entry (exposedPorts / health.tcpPorts) ---
+    $otherName = 'other-entry'
+    $otherDir = Join-Path $pkgRoot $otherName
+    New-Item -Path $otherDir -ItemType Directory -Force | Out-Null
+    $otherMf = [ordered]@{
+        schema       = 'windows-autostart/2'
+        name         = $otherName
+        command      = 'cmd.exe /c echo other'
+        landing      = 'startup'
+        exposedPorts = @(4000)
+        keepalive    = [ordered]@{
+            taskRestart = $false
+            process = [ordered]@{ enabled = $false; imageName = $null; commandLineContains = $null }
+            health  = [ordered]@{ enabled = $true; intervalSec = 30; failureThreshold = 3; tcpPorts = @(7777); http = $null }
+        }
+    }
+    ($otherMf | ConvertTo-Json -Depth 8) | Set-Content -Path (Join-Path $otherDir ($otherName + '.json')) -Encoding UTF8
+
+    $mfSelf = Read-EntryManifestForManager -PackagesRoot $pkgRoot -Name $entryName
+    $cDeclared = Test-ProposedPortsConflicts -PackagesRoot $pkgRoot -ManagerRoot $mgrRoot `
+        -Name $entryName -ProposedPorts @(4000) -Manifest $mfSelf
+    Assert-True -Condition (-not [bool]$cDeclared.ok) -Name 'conflict when port declared in other exposedPorts'
+    Assert-True -Condition ([string]$cDeclared.error -match '4000' -and [string]$cDeclared.error -match $otherName) -Name 'declared conflict error names port and entry'
+
+    $cHealth = Test-ProposedPortsConflicts -PackagesRoot $pkgRoot -ManagerRoot $mgrRoot `
+        -Name $entryName -ProposedPorts @(7777) -Manifest $mfSelf
+    Assert-True -Condition (-not [bool]$cHealth.ok) -Name 'conflict when port declared in other health.tcpPorts'
+
+    $mgrCfg = Read-ManagerConfig -ManagerRoot $mgrRoot
+    $mgrListen = [int]$mgrCfg['port']
+    $cMgr = Test-ProposedPortsConflicts -PackagesRoot $pkgRoot -ManagerRoot $mgrRoot `
+        -Name $entryName -ProposedPorts @($mgrListen) -Manifest $mfSelf
+    Assert-True -Condition (-not [bool]$cMgr.ok) -Name 'conflict with manager.listen port'
+    Assert-True -Condition ([string]$cMgr.error -match 'manager') -Name 'manager.listen conflict mentions manager'
+
+    $cSelfOk = Test-ProposedPortsConflicts -PackagesRoot $pkgRoot -ManagerRoot $mgrRoot `
+        -Name $entryName -ProposedPorts @(4010) -Manifest $mfSelf
+    Assert-True -Condition ([bool]$cSelfOk.ok) -Name 'own health.tcpPorts may also be exposedPorts'
+
+    # --- port conflict: foreign listen vs self listen ---
+    $script:PortListenProbeHook = {
+        param($Port)
+        if ([int]$Port -eq 5555) {
+            return ,@(
+                [ordered]@{
+                    pid = 4242; processName = 'node.exe'
+                    commandLine = 'C:\app\unrelated-service.js'; localAddress = '0.0.0.0'
+                }
+            )
+        }
+        return @()
+    }
+    $cListen = Test-ProposedPortsConflicts -PackagesRoot $pkgRoot -ManagerRoot $mgrRoot `
+        -Name $entryName -ProposedPorts @(5555) -Manifest $mfSelf
+    Assert-True -Condition (-not [bool]$cListen.ok) -Name 'conflict when foreign process listens'
+    Assert-True -Condition ([string]$cListen.error -match '5555' -and [string]$cListen.error -match '4242') -Name 'listen conflict error includes port and PID'
+
+    $script:PortListenProbeHook = {
+        param($Port)
+        if ([int]$Port -eq 5556) {
+            return ,@(
+                [ordered]@{
+                    pid = 5151; processName = 'python.exe'
+                    commandLine = 'python.exe C:\demo\ka-entry\run.py --demo'
+                    localAddress = '127.0.0.1'
+                }
+            )
+        }
+        return @()
+    }
+    $cSelfListen = Test-ProposedPortsConflicts -PackagesRoot $pkgRoot -ManagerRoot $mgrRoot `
+        -Name $entryName -ProposedPorts @(5556) -Manifest $mfSelf
+    Assert-True -Condition ([bool]$cSelfListen.ok) -Name 'allow listen when process matches entry hints'
+
+    $script:PortListenProbeHook = { param($Port) return @() }
 
     # --- PAUSE skips health restarts ---
     $null = Update-ManagerEntryState -ManagerRoot $mgrRoot -Name $entryName -Fields @{

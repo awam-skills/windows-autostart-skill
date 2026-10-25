@@ -78,6 +78,7 @@ $script:DeferredRunHook = $null
 $script:TcpProbeHook = $null
 $script:HttpProbeHook = $null
 $script:ProcessProbeHook = $null
+$script:PortListenProbeHook = $null
 $script:WatchPending = @{}
 $script:Watchers = New-Object System.Collections.Generic.List[object]
 $script:WatchRawEvents = [System.Collections.ArrayList]::Synchronized((New-Object System.Collections.ArrayList))
