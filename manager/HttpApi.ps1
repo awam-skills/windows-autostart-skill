@@ -179,6 +179,18 @@ function Invoke-ApiHandler {
                         return
                     }
                     'stop' {
+                        # 控制面自身：写 STOP 优雅退出，避免 CLI stop 按 powershell.exe 误杀全机 PowerShell
+                        if (Test-IsControlPlaneSelfEntry -Name $name -PackagesRoot $PackagesRoot) {
+                            $null = Request-ManagerGracefulStop -ManagerRoot $ManagerRoot
+                            Write-ManagerLog -ManagerRoot $ManagerRoot -Level 'INFO' -Message ("API stop self '{0}': graceful STOP" -f $name)
+                            Send-ApiJson -Response $Response -StatusCode 200 -Body @{
+                                ok     = $true
+                                result = 'ok'
+                                error  = $null
+                                data   = @{ name = $name; gracefulSelfStop = $true }
+                            }
+                            return
+                        }
                         $cliResult = Invoke-CliStop -CliPath $CliPath -Name $name -PackagesRoot $PackagesRoot
                         Send-ApiJson -Response $Response -StatusCode 200 -Body @{ ok = ($cliResult.result -eq 'ok' -or $cliResult.result -eq 'partial'); result = $cliResult.result; error = $cliResult.error; data = $cliResult.data }
                         return

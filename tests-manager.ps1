@@ -310,6 +310,87 @@ try {
     Assert-True -Condition ([bool]$rr.skipped -and $rr.reason -eq 'desiredEnabled=false') -Name 'Restart-Entry skips desiredEnabled=false'
 
     # -------------------------------------------------------------------------
+    # 6. Control-plane self-entry detection + deferred restart (no in-process stop)
+    # -------------------------------------------------------------------------
+    Assert-True -Condition ($null -ne (Get-Command Test-IsControlPlaneSelfEntry -ErrorAction SilentlyContinue)) -Name 'Test-IsControlPlaneSelfEntry exists'
+    Assert-True -Condition ($null -ne (Get-Command Request-ManagerGracefulStop -ErrorAction SilentlyContinue)) -Name 'Request-ManagerGracefulStop exists'
+    Assert-True -Condition ($null -ne (Get-Command Start-DeferredEntryRun -ErrorAction SilentlyContinue)) -Name 'Start-DeferredEntryRun exists'
+
+    $selfName = 'win-autostart-manager-selftest'
+    $selfDir = Join-Path $pkgRoot $selfName
+    New-Item -Path $selfDir -ItemType Directory -Force | Out-Null
+    $selfManifest = [ordered]@{
+        schema  = 'windows-autostart/2'
+        name    = $selfName
+        command = ('"{0}" -NoProfile -File "{1}" serve' -f (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'), $script:ManagerPs1)
+        landing = 'scheduled-task'
+    }
+    ($selfManifest | ConvertTo-Json -Depth 6) | Set-Content -Path (Join-Path $selfDir ($selfName + '.json')) -Encoding UTF8
+
+    $prevMgrScript = $script:ManagerScriptPath
+    $script:ManagerScriptPath = $script:ManagerPs1
+    try {
+        Assert-True -Condition (Test-IsControlPlaneSelfEntry -Name $selfName -PackagesRoot $pkgRoot) -Name 'self entry detected when command points at ManagerScriptPath'
+        Assert-True -Condition (-not (Test-IsControlPlaneSelfEntry -Name $entryName -PackagesRoot $pkgRoot)) -Name 'normal entry is not self'
+
+        $cliCalls = New-Object System.Collections.Generic.List[object]
+        $deferredCalls = New-Object System.Collections.Generic.List[object]
+        $script:CliInvokeHook = {
+            param($CliPath, $Arguments, $PackagesRoot)
+            $cliCalls.Add([ordered]@{ args = @($Arguments) })
+            return [ordered]@{ result = 'ok'; error = $null; ExitCode = 0 }
+        }
+        $script:DeferredRunHook = {
+            param($CliPath, $Name, $PackagesRoot, $ManagerRoot, $DelaySec, $WaitPortSec)
+            $deferredCalls.Add([ordered]@{ name = $Name; cli = $CliPath })
+        }
+        $null = Update-ManagerEntryState -ManagerRoot $mgrRoot -Name $selfName -Fields @{
+            desiredEnabled          = $true
+            restartBackoffLevel     = 0
+            consecutiveHealthFailures = 0
+        }
+        # clear lastRestartAt so cooldown does not skip
+        $stSelf = Read-ManagerStateDoc -ManagerRoot $mgrRoot
+        $eSelf = ConvertTo-PlainMap $stSelf.Entries[$selfName]
+        $eSelf.Remove('lastRestartAt')
+        $stSelf.Entries[$selfName] = $eSelf
+        Save-ManagerStateDoc -ManagerRoot $mgrRoot -State $stSelf
+
+        # 文件级 ManagerDryRun=1：自重启应走 deferred dry-run，不写 STOP、不调 CLI
+        $rrSelfDry = Restart-Entry -ManagerRoot $mgrRoot -CliPath 'stub-cli.ps1' -PackagesRoot $pkgRoot -Name $selfName -Reason 'api' -Cfg $cfg
+        Assert-True -Condition ([bool]$rrSelfDry['ok'] -and [bool]$rrSelfDry['deferred'] -and [bool]$rrSelfDry['selfRestart'] -and [bool]$rrSelfDry['dryRun']) -Name 'self restart dry-run returns deferred ok'
+        Assert-True -Condition ($cliCalls.Count -eq 0) -Name 'self dry-run does not call in-process CLI'
+        Assert-True -Condition ($deferredCalls.Count -eq 0) -Name 'self dry-run does not spawn deferred run'
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $mgrRoot 'STOP'))) -Name 'self dry-run does not write STOP'
+
+        # 关闭 dry-run 后应调度延迟 run 并写 STOP
+        $prevDry = $script:ManagerDryRun
+        $script:ManagerDryRun = $false
+        Remove-Item Env:WIN_AUTOSTART_MANAGER_DRYRUN -ErrorAction SilentlyContinue
+        $stSelf2 = Read-ManagerStateDoc -ManagerRoot $mgrRoot
+        $eSelf2 = ConvertTo-PlainMap $stSelf2.Entries[$selfName]
+        $eSelf2.Remove('lastRestartAt')
+        $eSelf2['restartBackoffLevel'] = 0
+        $stSelf2.Entries[$selfName] = $eSelf2
+        Save-ManagerStateDoc -ManagerRoot $mgrRoot -State $stSelf2
+
+        $rrSelf = Restart-Entry -ManagerRoot $mgrRoot -CliPath 'stub-cli.ps1' -PackagesRoot $pkgRoot -Name $selfName -Reason 'api' -Cfg $cfg
+        Assert-True -Condition ([bool]$rrSelf['ok'] -and [bool]$rrSelf['deferred'] -and [bool]$rrSelf['selfRestart'] -and -not [bool]$rrSelf['dryRun']) -Name 'self restart returns deferred ok'
+        Assert-True -Condition ($cliCalls.Count -eq 0) -Name 'self restart does not call in-process CLI stop/run'
+        Assert-True -Condition ($deferredCalls.Count -eq 1) -Name 'self restart schedules deferred run'
+        $stopFile = Join-Path $mgrRoot 'STOP'
+        Assert-True -Condition (Test-Path -LiteralPath $stopFile -PathType Leaf) -Name 'self restart writes STOP for graceful exit'
+        Remove-Item -LiteralPath $stopFile -Force -ErrorAction SilentlyContinue
+        $script:ManagerDryRun = $prevDry
+        $env:WIN_AUTOSTART_MANAGER_DRYRUN = '1'
+    }
+    finally {
+        $script:ManagerScriptPath = $prevMgrScript
+        $script:CliInvokeHook = $null
+        $script:DeferredRunHook = $null
+    }
+
+    # -------------------------------------------------------------------------
     # Bonus: register-manager.ps1 exists and mentions ADR-0003 / no silent fallback
     # -------------------------------------------------------------------------
     $regPath = Join-Path $script:TestRoot 'register-manager.ps1'

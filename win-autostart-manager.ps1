@@ -74,6 +74,7 @@ $script:ManagerModuleDir = Join-Path (Split-Path -Parent $script:ManagerScriptPa
 $script:ManagerDryRun = [bool]$DryRun
 $script:ManagerVerbose = [bool]$VerboseLog
 $script:CliInvokeHook = $null
+$script:DeferredRunHook = $null
 $script:TcpProbeHook = $null
 $script:HttpProbeHook = $null
 $script:ProcessProbeHook = $null

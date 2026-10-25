@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 — 2026-10-25
+
+### Fixes
+- Control-plane self restart/stop no longer suicides without coming back: API restart of `win-autostart-manager` schedules a deferred CLI `run` and exits via `STOP`
+- `stop` no longer falls back to killing every process named after the business command host (`powershell` / `python` / …); matches package path markers (and optional `commandLineContains`) instead
+
 ## 0.5.0 — 2026-10-24
 
 Control-plane complete (Phases 1–5).

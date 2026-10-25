@@ -1221,30 +1221,58 @@ function Get-EntryEnabled {
 }
 
 function Get-ProcessProbeNames {
+    <#
+      仅在 keepalive.process 显式启用且提供 imageName 时返回进程名。
+      不再用 command 的宿主 exe（powershell/python/node…）做无过滤 fallback，避免 stop 误杀全机同名进程。
+    #>
     param($Manifest)
     $names = New-Object System.Collections.Generic.List[string]
     if ($null -eq $Manifest) { return @() }
 
+    if (-not ($Manifest.PSObject.Properties.Name -contains 'keepalive') -or -not $Manifest.keepalive) {
+        return @()
+    }
+    $proc = $Manifest.keepalive.process
+    if (-not $proc) { return @() }
+
+    $enabled = $true
+    if ($proc.PSObject.Properties.Name -contains 'enabled' -and $null -ne $proc.enabled) {
+        $enabled = [bool]$proc.enabled
+    }
+    if (-not $enabled) { return @() }
+
     $img = $null
-    if ($Manifest.PSObject.Properties.Name -contains 'keepalive' -and $Manifest.keepalive) {
-        $proc = $Manifest.keepalive.process
-        if ($proc -and ($proc.PSObject.Properties.Name -contains 'imageName') -and $proc.imageName) {
-            $img = [string]$proc.imageName
-        }
+    if (($proc.PSObject.Properties.Name -contains 'imageName') -and $proc.imageName) {
+        $img = [string]$proc.imageName
     }
     if ($img) {
         $base = [System.IO.Path]::GetFileNameWithoutExtension($img)
         if ($base) { $names.Add($base) }
     }
-    elseif ($Manifest.command) {
-        $res = Get-ExeAndRest ([string]$Manifest.command)
-        $exe = $res['Exe']
-        if ($exe -and ([System.IO.Path]::GetExtension($exe).ToLowerInvariant() -eq '.exe')) {
-            $base = [System.IO.Path]::GetFileNameWithoutExtension($exe)
-            if ($base) { $names.Add($base) }
+    return @($names)
+}
+
+function Get-StopCommandLineMarkers {
+    <# 用封装路径 / 业务命令中的独特片段匹配进程，避免仅按宿主 exe 名盲杀。 #>
+    param([string]$Name, [string]$Root, $Manifest)
+    $markers = New-Object System.Collections.Generic.List[string]
+    if ($Root) {
+        $cmdPath = Join-Path $Root ($Name + '.cmd')
+        $vbsPath = Join-Path $Root ($Name + '.vbs')
+        if (Test-Path -LiteralPath $cmdPath -PathType Leaf) { $markers.Add($cmdPath) }
+        if (Test-Path -LiteralPath $vbsPath -PathType Leaf) { $markers.Add($vbsPath) }
+        $markers.Add($Root)
+    }
+    if ($Manifest -and ($Manifest.PSObject.Properties.Name -contains 'command') -and $Manifest.command) {
+        $cmd = [string]$Manifest.command
+        if ($cmd -match '(?i)-File\s+"([^"]+\.ps1)"') {
+            $markers.Add($Matches[1])
+        }
+        elseif ($cmd -match '(?i)-File\s+(\S+\.ps1)') {
+            $markers.Add($Matches[1].Trim('"'))
         }
     }
-    return @($names)
+    return @($markers | Select-Object -Unique)
 }
 
 # =============================================================================
@@ -1440,20 +1468,67 @@ function Invoke-Stop {
     }
 
     $probeNames = Get-ProcessProbeNames -Manifest $manifest
-    $stoppedPids = New-Object System.Collections.Generic.List[int]
-    foreach ($probe in $probeNames) {
-        try {
-            $procs = @(Get-Process -Name $probe -ErrorAction SilentlyContinue)
-            foreach ($p in $procs) {
-                try {
-                    Stop-Process -Id $p.Id -Force -ErrorAction Stop
-                    $stoppedPids.Add([int]$p.Id)
-                }
-                catch { }
-            }
+    $cmdContains = $null
+    if ($manifest -and ($manifest.PSObject.Properties.Name -contains 'keepalive') -and $manifest.keepalive) {
+        $proc = $manifest.keepalive.process
+        if ($proc -and ($proc.PSObject.Properties.Name -contains 'commandLineContains') -and $proc.commandLineContains) {
+            $cmdContains = [string]$proc.commandLineContains
         }
-        catch { }
     }
+    $markers = Get-StopCommandLineMarkers -Name $Name -Root $root -Manifest $manifest
+    $stoppedPids = New-Object System.Collections.Generic.List[int]
+    $myPid = $PID
+
+    try {
+        $cimProcs = @(Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue)
+        foreach ($cp in $cimProcs) {
+            $pidVal = [int]$cp.ProcessId
+            if ($pidVal -le 0 -or $pidVal -eq $myPid) { continue }
+
+            $cl = [string]$cp.CommandLine
+            $procName = [string]$cp.Name
+            $match = $false
+
+            foreach ($probe in $probeNames) {
+                $probeBase = [System.IO.Path]::GetFileNameWithoutExtension($probe)
+                $procBase = [System.IO.Path]::GetFileNameWithoutExtension($procName)
+                if ($procBase -ne $probeBase) { continue }
+                if ($cmdContains) {
+                    if ($cl -and ($cl.IndexOf($cmdContains, [StringComparison]::OrdinalIgnoreCase) -ge 0)) {
+                        $match = $true
+                    }
+                }
+                else {
+                    # 显式 imageName 但无 commandLineContains：仍要求命中封装标记，避免盲杀同名进程
+                    foreach ($m in $markers) {
+                        if ($cl -and $m -and ($cl.IndexOf($m, [StringComparison]::OrdinalIgnoreCase) -ge 0)) {
+                            $match = $true
+                            break
+                        }
+                    }
+                    if (-not $match -and (@($markers).Count -eq 0)) { $match = $true }
+                }
+                break
+            }
+
+            if (-not $match -and $cl) {
+                foreach ($m in $markers) {
+                    if ($m -and ($cl.IndexOf($m, [StringComparison]::OrdinalIgnoreCase) -ge 0)) {
+                        $match = $true
+                        break
+                    }
+                }
+            }
+
+            if (-not $match) { continue }
+            try {
+                Stop-Process -Id $pidVal -Force -ErrorAction Stop
+                $stoppedPids.Add($pidVal)
+            }
+            catch { }
+        }
+    }
+    catch { }
 
     $taskStopped = $false
     $task = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
@@ -1483,6 +1558,7 @@ function Invoke-Stop {
             stoppedPids = $pidArr
             taskStopped = $taskStopped
             probes      = $probeArr
+            markers     = @($markers)
         }
         Result = 'ok'
     }
