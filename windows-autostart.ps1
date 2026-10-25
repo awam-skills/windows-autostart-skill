@@ -1275,6 +1275,107 @@ function Get-StopCommandLineMarkers {
     return @($markers | Select-Object -Unique)
 }
 
+function Get-EntryExposedPorts {
+    <# 读取 manifest 顶层 exposedPorts（端口数组）；缺失或非法时返回空。 #>
+    param($Manifest)
+    if ($null -eq $Manifest) { return @() }
+    if (-not ($Manifest.PSObject.Properties.Name -contains 'exposedPorts')) { return @() }
+    $raw = $Manifest.exposedPorts
+    if ($null -eq $raw) { return @() }
+    $ports = New-Object System.Collections.Generic.List[int]
+    foreach ($item in @($raw)) {
+        $n = 0
+        if ([int]::TryParse([string]$item, [ref]$n)) {
+            if ($n -gt 0 -and $n -le 65535 -and -not $ports.Contains($n)) { $ports.Add($n) }
+        }
+    }
+    return @($ports.ToArray())
+}
+
+function Get-ProtectedSelfPidSet {
+    <# 当前进程及其祖先链：stop 的杀灭序列必须跳过，防止 CLI 自杀或误杀调用方（如 Manager）。 #>
+    param($CimProcs)
+    $set = New-Object 'System.Collections.Generic.HashSet[int]'
+    $null = $set.Add([int]$PID)
+    if (-not $CimProcs -or @($CimProcs).Count -eq 0) { return $set }
+    $byId = @{}
+    foreach ($cp in $CimProcs) { $byId[[int]$cp.ProcessId] = $cp }
+    $cur = [int]$PID
+    $guard = 0
+    while ($guard -lt 64) {
+        $guard++
+        if (-not $byId.ContainsKey($cur)) { break }
+        $parent = [int]$byId[$cur].ParentProcessId
+        if ($parent -le 0 -or $set.Contains($parent)) { break }
+        $null = $set.Add($parent)
+        $cur = $parent
+    }
+    return $set
+}
+
+function Get-ProcessTreeIdOrder {
+    <#
+      把种子 PID 展开成去重杀灭序列：每个成员先于其后代出现（父先子后），
+      保证父进程先死、不会在杀后代期间重新拉起子进程。
+    #>
+    param($CimProcs, [int[]]$SeedPids)
+    if (-not $SeedPids -or @($SeedPids).Count -eq 0) { return @() }
+    $childrenOf = @{}
+    foreach ($cp in $CimProcs) {
+        $pp = [int]$cp.ParentProcessId
+        if (-not $childrenOf.ContainsKey($pp)) {
+            $childrenOf[$pp] = New-Object System.Collections.Generic.List[int]
+        }
+        $childrenOf[$pp].Add([int]$cp.ProcessId)
+    }
+    $order = New-Object System.Collections.Generic.List[int]
+    $seen = New-Object 'System.Collections.Generic.HashSet[int]'
+    foreach ($seed in @($SeedPids)) {
+        if ($seed -le 0 -or $seen.Contains($seed)) { continue }
+        $stack = New-Object System.Collections.Generic.Stack[int]
+        $stack.Push($seed)
+        while ($stack.Count -gt 0) {
+            $cur = $stack.Pop()
+            if ($seen.Contains($cur)) { continue }
+            $null = $seen.Add($cur)
+            $order.Add($cur)
+            if ($childrenOf.ContainsKey($cur)) {
+                foreach ($child in $childrenOf[$cur]) {
+                    if (-not $seen.Contains($child)) { $stack.Push($child) }
+                }
+            }
+        }
+    }
+    return @($order.ToArray())
+}
+
+function Stop-ProcessTreePid {
+    <#
+      杀单个进程。Windows PowerShell 5.1 的 Stop-Process 在部分令牌组合下
+      OpenProcess 报 Access Denied（pwsh 7 与 .NET Process.Kill() 均可成功），
+      故以 .Kill() 为主、Stop-Process / taskkill 依次兜底。
+    #>
+    param([int]$TargetPid)
+    if ($TargetPid -le 0) { return $false }
+    try {
+        $p = [System.Diagnostics.Process]::GetProcessById($TargetPid)
+        $p.Kill()
+        return $true
+    }
+    catch { }
+    try {
+        Stop-Process -Id $TargetPid -Force -ErrorAction Stop
+        return $true
+    }
+    catch { }
+    try {
+        $null = & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /F /PID $TargetPid 2>$null
+        if ($LASTEXITCODE -eq 0) { return $true }
+    }
+    catch { }
+    return $false
+}
+
 # =============================================================================
 # list / enable / disable / stop（phase 2）
 # =============================================================================
@@ -1476,8 +1577,11 @@ function Invoke-Stop {
         }
     }
     $markers = Get-StopCommandLineMarkers -Name $Name -Root $root -Manifest $manifest
-    $stoppedPids = New-Object System.Collections.Generic.List[int]
+    $ports = Get-EntryExposedPorts -Manifest $manifest
+    $candidatePids = New-Object System.Collections.Generic.List[int]
+    $listenerPids = New-Object System.Collections.Generic.List[int]
     $myPid = $PID
+    $cimProcs = @()
 
     try {
         $cimProcs = @(Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue)
@@ -1520,12 +1624,48 @@ function Invoke-Stop {
                 }
             }
 
-            if (-not $match) { continue }
+            if ($match -and -not $candidatePids.Contains($pidVal)) {
+                $candidatePids.Add($pidVal)
+            }
+        }
+    }
+    catch { }
+
+    # exposedPorts 监听者：真实业务进程（uv / python / uvicorn 等）命令行往往不含任何
+    # 封装标记，端口监听 PID 是唯一定位手段。命中后与标记匹配 PID 一起按进程树杀灭。
+    if (@($ports).Count -gt 0) {
+        foreach ($port in $ports) {
             try {
-                Stop-Process -Id $pidVal -Force -ErrorAction Stop
-                $stoppedPids.Add($pidVal)
+                $conns = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop)
+                foreach ($conn in $conns) {
+                    $opid = [int]$conn.OwningProcess
+                    if ($opid -gt 0 -and -not $listenerPids.Contains($opid)) {
+                        $listenerPids.Add($opid)
+                    }
+                }
             }
             catch { }
+        }
+    }
+
+    $stoppedPids = New-Object System.Collections.Generic.List[int]
+    $killOrder = @()
+    try {
+        # 种子 = 标记/探针匹配（封装宿主、cmd/wscript 等）+ 端口监听者（业务真实进程）。
+        # 监听者通常是进程树叶子（uvicorn worker）；杀叶子会让等待它的父链（litellm、
+        # python、uv、cmd）连锁退出，父链无需也无法安全地向上遍历杀灭。
+        $seeds = @()
+        $seeds += @($candidatePids.ToArray())
+        $seeds += @($listenerPids.ToArray())
+        $killOrder = Get-ProcessTreeIdOrder -CimProcs $cimProcs -SeedPids $seeds
+
+        # 自保护：跳过自身与祖先链（CLI 宿主、Manager 等）
+        $protected = Get-ProtectedSelfPidSet -CimProcs $cimProcs
+        foreach ($k in $killOrder) {
+            if ($k -le 0 -or $protected.Contains($k)) { continue }
+            if (Stop-ProcessTreePid -TargetPid $k) {
+                $stoppedPids.Add($k)
+            }
         }
     }
     catch { }
@@ -1559,6 +1699,8 @@ function Invoke-Stop {
             taskStopped = $taskStopped
             probes      = $probeArr
             markers     = @($markers)
+            ports       = @($ports)
+            portPids    = @($listenerPids.ToArray())
         }
         Result = 'ok'
     }
