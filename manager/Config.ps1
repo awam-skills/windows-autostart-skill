@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # Manager config contracts: manager.json / watches.json defaults under _manager.
 
 Set-StrictMode -Version 2.0

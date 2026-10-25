@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   windows-autostart Manager Core — health loop, file watches, localhost HTTP API + optional static Web panel.

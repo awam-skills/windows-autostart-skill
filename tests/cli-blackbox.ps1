@@ -324,6 +324,17 @@ try {
     $stp = Invoke-CliProc @('stop', '-Name', $tMg.Name, '-Root', $tMg.Root)
     Assert ($stp.ExitCode -eq 0) 'stop exits 0 (0 processes ok)'
     Assert ($null -ne $stp.Json.data.stoppedPids) 'stop returns stoppedPids'
+    Assert ($stp.Json.data.desiredEnabled -eq $false) 'stop response carries desiredEnabled=false'
+
+    $stStp = Invoke-CliProc @('status', '-Name', $tMg.Name, '-Root', $tMg.Root)
+    Assert ($stStp.Json.data.desiredEnabled -eq $false) 'stop writes desiredEnabled=false (keepalive supervision off)'
+
+    $runMg = Invoke-CliProc @('run', '-Name', $tMg.Name, '-Root', $tMg.Root)
+    Assert ($runMg.ExitCode -eq 0) 'run exits 0 after stop'
+    Assert ($runMg.Json.data.desiredEnabled -eq $true) 'run response carries desiredEnabled=true'
+
+    $stRun = Invoke-CliProc @('status', '-Name', $tMg.Name, '-Root', $tMg.Root)
+    Assert ($stRun.Json.data.desiredEnabled -eq $true) 'run writes desiredEnabled=true (keepalive resumes)'
 
     $uMg = Invoke-CliProc @('uninstall', '-Name', $tMg.Name, '-Root', $tMg.Root)
     Assert ($uMg.ExitCode -eq 0) 'management uninstall exits 0'

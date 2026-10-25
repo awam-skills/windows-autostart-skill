@@ -54,7 +54,7 @@ PowerShell 5.1.
 | Inspect | `status -Name <n>` | none | `data.diagnosis`, `data.enabled`, `data.desiredEnabled`, `data.log.*Tail`, `data.landings` |
 | List | `list [-Root <parent>]` | none | `data.entries[]` (`name`,`landing`,`mode`,`enabled`,`schema`,`root`) |
 | Enable / disable | `enable` / `disable -Name <n>` | toggles landing + state intent | `data.enabled`, `data.desiredEnabled` |
-| Stop (keep registration) | `stop -Name <n>` | ends process / task run | `data.stoppedPids`, `data.taskStopped` |
+| Stop (keep registration) | `stop -Name <n>` | kills matched + port-listener process tree, stops task run, writes `desiredEnabled=false` (keepalive paused until next `run`) | `data.stoppedPids`, `data.ports`, `data.portPids`, `data.taskStopped`, `data.desiredEnabled` |
 | Remove | `uninstall -Name <n>` | removes owned landings + package | `data.removed` / `skipped` / `absent` |
 
 `add` optional flags (ParamSpec): `WorkDir`, `Landing`
@@ -154,7 +154,7 @@ Registration plane CLI now includes inventory/control helpers. A **control plane
 | List all entries | `list [-Root <parent>]` | read-only scan of package parent (default `~\.win-autostart`, skips `_manager`) → `data.entries[]` |
 | Enable | `enable -Name <n> [-Root]` | enable landing; writes `desiredEnabled=true` to `~\.win-autostart\_manager\state.json` |
 | Disable | `disable -Name <n> [-Root]` | disable landing; writes `desiredEnabled=false` (does not uninstall) |
-| Stop process | `stop -Name <n> [-Root]` | end business process / Stop-ScheduledTask; **does not** disable |
+| Stop process | `stop -Name <n> [-Root]` | kills package-marker matches **plus** `exposedPorts` listeners expanded to process trees (parent-first; self/ancestor chain protected); Stop-ScheduledTask; writes `desiredEnabled=false` so auto keepalive (health/watch) stays hands-off until `run` writes `desiredEnabled=true`. Landing untouched (unlike `disable`) |
 | Inspect (enhanced) | `status -Name <n>` | also `data.enabled`, `data.desiredEnabled`, `data.manager` |
 
 Never invent package-local `*-watchdog.vbs` as the recommended keepalive path (Manager Phase 3+).

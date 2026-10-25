@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Phase 3 Manager Core tests (self-contained; no Register-ScheduledTask required).
@@ -305,8 +305,8 @@ try {
     Assert-True -Condition ($null -ne $sw -and $sw.action -eq 'skip') -Name 'watch skips when desiredEnabled=false'
     Assert-True -Condition (-not (Test-Path $restartsLog)) -Name 'watch skip does not write restarts log'
 
-    # Direct Restart-Entry skip
-    $rr = Restart-Entry -ManagerRoot $mgrRoot -CliPath 'stub' -PackagesRoot $pkgRoot -Name $entryName -Reason 'manual' -DryRun -Cfg $cfg
+    # Direct Restart-Entry skip（自动触发才受 desiredEnabled 约束）
+    $rr = Restart-Entry -ManagerRoot $mgrRoot -CliPath 'stub' -PackagesRoot $pkgRoot -Name $entryName -Reason 'health' -DryRun -Cfg $cfg
     Assert-True -Condition ([bool]$rr.skipped -and $rr.reason -eq 'desiredEnabled=false') -Name 'Restart-Entry skips desiredEnabled=false'
 
     # -------------------------------------------------------------------------
@@ -389,6 +389,60 @@ try {
         $script:CliInvokeHook = $null
         $script:DeferredRunHook = $null
     }
+
+    # -------------------------------------------------------------------------
+    # 7. 意图协议：显式(api)重启绕过 desiredEnabled/cooldown 闸门并复位退避；
+    #    自动(health)重启仍受限；重启宽限期内健康失败不计数、不触发重启
+    # -------------------------------------------------------------------------
+    # 7a. api 重启在 desiredEnabled=false 时不被跳过（操作者显式意图）
+    $rrApi = Restart-Entry -ManagerRoot $mgrRoot -CliPath 'stub' -PackagesRoot $pkgRoot -Name $entryName -Reason 'api' -DryRun -Cfg $cfg
+    Assert-True -Condition (-not [bool]$rrApi.skipped) -Name 'api restart bypasses desiredEnabled=false skip'
+
+    # 7b. api 重启在冷却窗口内不被拦截，且复位退避
+    $null = Update-ManagerEntryState -ManagerRoot $mgrRoot -Name $entryName -Fields @{
+        desiredEnabled      = $true
+        lastRestartAt       = (Get-Date).ToString('o')
+        restartBackoffLevel = 3
+    }
+    $rrApi2 = Restart-Entry -ManagerRoot $mgrRoot -CliPath 'stub' -PackagesRoot $pkgRoot -Name $entryName -Reason 'api' -DryRun -Cfg $cfg
+    Assert-True -Condition (-not [bool]$rrApi2.skipped) -Name 'api restart bypasses cooldown'
+    $stApi2 = Get-ManagerEntryState -ManagerRoot $mgrRoot -Name $entryName
+    Assert-equal -Expected 0 -Actual ([int]$stApi2['restartBackoffLevel']) -Name 'api restart resets backoff'
+
+    # 7c. health 自动重启在冷却窗口内仍被拦截（退避 3 → 冷却 8s）
+    $null = Update-ManagerEntryState -ManagerRoot $mgrRoot -Name $entryName -Fields @{
+        lastRestartAt       = (Get-Date).ToString('o')
+        restartBackoffLevel = 3
+    }
+    $rrHealth = Restart-Entry -ManagerRoot $mgrRoot -CliPath 'stub' -PackagesRoot $pkgRoot -Name $entryName -Reason 'health' -DryRun -Cfg $cfg
+    Assert-True -Condition ([bool]$rrHealth.skipped -and $rrHealth.reason -eq 'cooldown') -Name 'health restart still honors cooldown'
+
+    # 7d. 重启宽限期：启动窗口内探针失败 → action=grace，失败计数保持 0，不写重启日志
+    $script:TcpProbeHook = { param($HostName, $Port, $TimeoutMs) return $false }
+    $null = Update-ManagerEntryState -ManagerRoot $mgrRoot -Name $entryName -Fields @{
+        desiredEnabled            = $true
+        consecutiveHealthFailures = 0
+        lastRestartAt             = (Get-Date).ToString('o')
+    }
+    if (Test-Path $restartsLog) { Remove-Item $restartsLog -Force }
+    $gActions = Invoke-HealthTick -ManagerRoot $mgrRoot -CliPath 'stub' -PackagesRoot $pkgRoot -DryRun -Cfg $cfg -ForceInterval
+    $gRow = @($gActions | Where-Object { $_.name -eq $entryName }) | Select-Object -First 1
+    Assert-True -Condition ($null -ne $gRow -and $gRow.action -eq 'grace') -Name 'health tick returns grace after restart'
+    $stGrace = Get-ManagerEntryState -ManagerRoot $mgrRoot -Name $entryName
+    Assert-equal -Expected 0 -Actual ([int]$stGrace['consecutiveHealthFailures']) -Name 'grace does not count failures'
+    Assert-True -Condition (-not (Test-Path $restartsLog)) -Name 'grace does not write restarts log'
+
+    # 7e. 宽限期过后恢复正常失败计数（把 lastRestartAt 拨回 60s 前）
+    $null = Update-ManagerEntryState -ManagerRoot $mgrRoot -Name $entryName -Fields @{
+        lastRestartAt             = (Get-Date).AddSeconds(-60).ToString('o')
+        consecutiveHealthFailures = 0
+    }
+    $postGrace = Invoke-HealthTick -ManagerRoot $mgrRoot -CliPath 'stub' -PackagesRoot $pkgRoot -DryRun -Cfg $cfg -ForceInterval
+    $pgRow = @($postGrace | Where-Object { $_.name -eq $entryName }) | Select-Object -First 1
+    $stPg = Get-ManagerEntryState -ManagerRoot $mgrRoot -Name $entryName
+    Assert-True -Condition ($null -ne $pgRow -and $pgRow.action -eq 'fail') -Name 'post-grace tick counts failure again'
+    Assert-equal -Expected 1 -Actual ([int]$stPg['consecutiveHealthFailures']) -Name 'post-grace failure increments'
+    $script:TcpProbeHook = $null
 
     # -------------------------------------------------------------------------
     # Bonus: register-manager.ps1 exists and mentions ADR-0003 / no silent fallback

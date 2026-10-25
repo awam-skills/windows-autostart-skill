@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.0 — 2026-10-26
+
+### Added
+- `stop` now actually ends real business processes: package-marker matches plus
+  `exposedPorts` listeners (uv / python / uvicorn style leaves carry no markers),
+  expanded into deduped process trees and killed parent-first
+  (`Get-ProcessTreeIdOrder`), with the CLI's own PID + ancestor chain protected
+- Intent protocol: explicit `stop` writes `desiredEnabled=false` (auto keepalive
+  stands down until the next `run` writes `desiredEnabled=true`); explicit
+  (`api` / `manual`) manager restarts bypass `desiredEnabled` and cooldown gates
+  and reset backoff, automatic (`health` / `watch:*`) restarts stay gated
+- Post-restart startup grace window in the health tick: probe failures within
+  `max(15s, intervalSec)` after a restart count as `grace`, not failures
+- `stop` envelope exposes `ports` / `portPids`
+
+### Fixes
+- PS 5.1 kill fallback: `Stop-Process` can fail with Access Denied on some
+  token combos while `.NET Process.Kill()` succeeds — `Stop-ProcessTreePid`
+  now tries `.Kill()` → `Stop-Process` → `taskkill`
+- Health tick no longer leaks `Update-ManagerEntryState` return values into the
+  action pipeline (StrictMode `PropertyNotFoundException` in callers)
+- UTF-8 BOM added to all repo `.ps1` files: PS 5.1 parses BOM-less UTF-8 with
+  Chinese comments as ANSI/GBK, swallowing following ASCII bytes mid-statement
+
 ## 0.5.1 — 2026-10-25
 
 ### Fixes

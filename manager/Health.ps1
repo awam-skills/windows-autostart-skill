@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # Health loop: TCP / HTTP / process probes → consecutive failures → Restart-Entry.
 
 Set-StrictMode -Version 2.0
@@ -344,7 +344,7 @@ function Invoke-HealthTick {
                 $detailParts += @($check.softFailures | ForEach-Object { "soft:$_" })
             }
             $okDetail = ($detailParts -join ',')
-            Update-ManagerEntryState -ManagerRoot $ManagerRoot -Name $name -Fields @{
+            $null = Update-ManagerEntryState -ManagerRoot $ManagerRoot -Name $name -Fields @{
                 lastHealthCheckAt         = $nowIso
                 consecutiveHealthFailures = 0
                 lastHealthDetail          = $okDetail
@@ -353,8 +353,30 @@ function Invoke-HealthTick {
             continue
         }
 
+        # 重启后的启动宽限期：新进程尚未就绪（端口未监听/进程未起）属预期，
+        # 此窗口内探针失败不计入 consecutiveHealthFailures，也不触发重启。
+        if ($slice.ContainsKey('lastRestartAt') -and $slice['lastRestartAt']) {
+            $inRestartGrace = $false
+            try {
+                $lastRestart = [datetime]::Parse([string]$slice['lastRestartAt'], $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
+                $graceSec = [Math]::Max(15, [int]$plan.intervalSec)
+                if (((Get-Date) - $lastRestart).TotalSeconds -lt $graceSec) { $inRestartGrace = $true }
+            }
+            catch { }
+            if ($inRestartGrace) {
+                $graceDetail = ('grace:' + ($check.failures -join ','))
+                $null = Update-ManagerEntryState -ManagerRoot $ManagerRoot -Name $name -Fields @{
+                    lastHealthCheckAt = $nowIso
+                    lastHealthDetail  = $graceDetail
+                }
+                Write-ManagerLog -ManagerRoot $ManagerRoot -Level 'INFO' -Message ("Health grace '{0}' (restart startup window) detail={1}" -f $name, ($check.failures -join ','))
+                $actions.Add([ordered]@{ name = $name; action = 'grace'; detail = $graceDetail; failures = $failures })
+                continue
+            }
+        }
+
         $failures = $failures + 1
-        Update-ManagerEntryState -ManagerRoot $ManagerRoot -Name $name -Fields @{
+        $null = Update-ManagerEntryState -ManagerRoot $ManagerRoot -Name $name -Fields @{
             lastHealthCheckAt         = $nowIso
             consecutiveHealthFailures = $failures
             lastHealthDetail          = ($check.failures -join ',')

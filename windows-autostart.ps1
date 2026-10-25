@@ -740,13 +740,24 @@ function Invoke-Run {
         }
     }
 
+    # 用户意图：显式 run = 要求它在运行 → 恢复保活监督（desiredEnabled=true），
+    # 并复位健康失败计数与重启退避（操作者介入 = 全新起点）
+    $runAt = (Get-Date).ToString('o')
+    $null = Update-ManagerEntry -Name $Name -Fields @{
+        desiredEnabled            = $true
+        consecutiveHealthFailures = 0
+        restartBackoffLevel       = 0
+        updatedAt                 = $runAt
+    }
+
     return @{
         Data = [ordered]@{
-            name    = $Name
-            root    = $root
-            via     = $via
-            visible = [bool]$Visible
-            detail  = $detail
+            name           = $Name
+            root           = $root
+            via            = $via
+            visible        = [bool]$Visible
+            desiredEnabled = $true
+            detail         = $detail
             next    = [ordered]@{
                 statusHint  = "随后调用 status -Name $Name 查看 diagnosis 与日志尾部"
                 logs        = [ordered]@{ out = $outLog; err = $errLog }
@@ -1684,20 +1695,25 @@ function Invoke-Stop {
     }
 
     $stopAt = (Get-Date).ToString('o')
+    # 用户意图：显式 stop = 要求它保持停止 → 写 desiredEnabled=false，
+    # 保活（health/watch）不再把它拉起；需要恢复时用 run（写回 true）。
+    # 与 disable 的区别：disable 额外摘除落点（重启后也不再自启），stop 保留落点。
     $null = Update-ManagerEntry -Name $Name -Fields @{
-        lastStopAt = $stopAt
-        updatedAt  = $stopAt
+        desiredEnabled = $false
+        lastStopAt     = $stopAt
+        updatedAt      = $stopAt
     }
 
     $pidArr = @($stoppedPids.ToArray())
     $probeArr = @($probeNames)
     return @{
         Data = [ordered]@{
-            name        = $Name
-            root        = $root
-            stoppedPids = $pidArr
-            taskStopped = $taskStopped
-            probes      = $probeArr
+            name           = $Name
+            root           = $root
+            stoppedPids    = $pidArr
+            taskStopped    = $taskStopped
+            desiredEnabled = $false
+            probes         = $probeArr
             markers     = @($markers)
             ports       = @($ports)
             portPids    = @($listenerPids.ToArray())

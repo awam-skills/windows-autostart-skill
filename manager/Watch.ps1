@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # Watch loop: FileSystemWatcher + debounce → Restart-Entry for targets.
 # Event handlers only enqueue raw events (safe across Register-ObjectEvent scopes);
 # the serve loop drains into debounce via Invoke-WatchEventDrain.

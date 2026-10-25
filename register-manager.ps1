@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Register win-autostart-manager as a logon scheduled-task via the registration CLI.

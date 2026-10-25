@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # Invoke registration-plane CLI and parse JSON envelope.
 
 Set-StrictMode -Version 2.0

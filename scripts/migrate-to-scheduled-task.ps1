@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Migrate .win-autostart packages to Scheduled Task landing + Manager keepalive.

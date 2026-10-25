@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # Restart pipeline: respect desiredEnabled, cooldown + exponential backoff.
 
 Set-StrictMode -Version 2.0
@@ -169,7 +169,12 @@ function Restart-Entry {
 
     if (-not $Cfg) { $Cfg = Read-ManagerConfig -ManagerRoot $ManagerRoot }
 
-    if (-not (Test-EntryDesiredEnabled -ManagerRoot $ManagerRoot -Name $Name)) {
+    # 触发来源分流：自动触发（health / watch:*）受 desiredEnabled 与冷却退避约束，
+    # 用于压制无人值守的重启风暴；用户显式触发（api / manual 等）代表操作者意图，
+    # 绕过两道闸门并复位退避与失败计数。
+    $isAutoReason = ($Reason -eq 'health' -or $Reason -like 'health:*' -or $Reason -like 'watch:*')
+
+    if ($isAutoReason -and -not (Test-EntryDesiredEnabled -ManagerRoot $ManagerRoot -Name $Name)) {
         Write-ManagerLog -ManagerRoot $ManagerRoot -Level 'INFO' -Message ("Restart skip '{0}': desiredEnabled=false (reason={1})" -f $Name, $Reason)
         return [ordered]@{
             ok     = $false
@@ -187,7 +192,7 @@ function Restart-Entry {
     }
     $cooldownSec = Get-RestartCooldownSec -Cfg $Cfg -BackoffLevel $backoff
 
-    if ($slice.ContainsKey('lastRestartAt') -and $slice['lastRestartAt']) {
+    if ($isAutoReason -and $slice.ContainsKey('lastRestartAt') -and $slice['lastRestartAt']) {
         try {
             $last = [datetime]::Parse([string]$slice['lastRestartAt'], $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
             $elapsed = ((Get-Date) - $last).TotalSeconds
@@ -238,14 +243,15 @@ function Restart-Entry {
         $null = Start-DeferredEntryRun -CliPath $CliPath -Name $Name -PackagesRoot $PackagesRoot -ManagerRoot $ManagerRoot
         $null = Request-ManagerGracefulStop -ManagerRoot $ManagerRoot
         $null = Update-ManagerEntryState -ManagerRoot $ManagerRoot -Name $Name -Fields @{
-            lastRestartAt       = $nowIso
-            restartBackoffLevel = $backoff + 1
-            lastRestartReason   = $Reason
-            lastRestartDryRun   = $false
-            lastRestartOk       = $true
-            lastStopResult      = 'graceful-stop'
-            lastRunResult       = 'deferred'
-            selfRestartDeferred = $true
+            lastRestartAt             = $nowIso
+            restartBackoffLevel       = $backoff + 1
+            lastRestartReason         = $Reason
+            lastRestartDryRun         = $false
+            lastRestartOk             = $true
+            lastStopResult            = 'graceful-stop'
+            lastRunResult             = 'deferred'
+            consecutiveHealthFailures = 0
+            selfRestartDeferred       = $true
         }
         return [ordered]@{
             ok          = $true
@@ -263,7 +269,7 @@ function Restart-Entry {
     if ($useDry) {
         Write-DryRunRestartIntent -ManagerRoot $ManagerRoot -Name $Name -Reason $Reason
         Write-ManagerLog -ManagerRoot $ManagerRoot -Level 'INFO' -Message ("Restart DRYRUN '{0}' reason={1}" -f $Name, $Reason)
-        $newBackoff = $backoff + 1
+        $newBackoff = if ($isAutoReason) { $backoff + 1 } else { 0 }
         $null = Update-ManagerEntryState -ManagerRoot $ManagerRoot -Name $Name -Fields @{
             lastRestartAt         = $nowIso
             restartBackoffLevel   = $newBackoff
@@ -284,15 +290,19 @@ function Restart-Entry {
     $runR = Invoke-CliRun -CliPath $CliPath -Name $Name -PackagesRoot $PackagesRoot
 
     $ok = ($runR.result -eq 'ok' -or $runR.result -eq 'partial')
-    $newBackoff = if ($ok) { $backoff + 1 } else { $backoff + 1 }  # bump until health ok resets
+    # 自动重启递增退避（压制风暴，直到健康恢复才复位）；
+    # 用户显式重启复位退避，并清零失败计数（配合 health tick 的重启宽限期）
+    $newBackoff = if ($isAutoReason) { $backoff + 1 } else { 0 }
     $null = Update-ManagerEntryState -ManagerRoot $ManagerRoot -Name $Name -Fields @{
-        lastRestartAt       = $nowIso
-        restartBackoffLevel = $newBackoff
-        lastRestartReason   = $Reason
-        lastRestartDryRun   = $false
-        lastRestartOk       = $ok
-        lastStopResult      = $stopR.result
-        lastRunResult       = $runR.result
+        lastRestartAt             = $nowIso
+        restartBackoffLevel       = $newBackoff
+        lastRestartReason         = $Reason
+        lastRestartDryRun         = $false
+        lastRestartOk             = $ok
+        lastStopResult            = $stopR.result
+        lastRunResult             = $runR.result
+        consecutiveHealthFailures = 0
+        desiredEnabled            = $true
     }
 
     if (-not $ok) {
