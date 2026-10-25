@@ -246,18 +246,12 @@
     if (!name) return;
     state.selected = name;
     $('detailJson').textContent = '加载中…';
-    Promise.all([
-      api('/entries/' + encodeURIComponent(name)),
-      api('/entries/' + encodeURIComponent(name) + '/keepalive'),
-      api('/entries/' + encodeURIComponent(name) + '/ports')
-    ]).then(function (pair) {
-      var st = pair[0];
-      var ka = pair[1];
-      var ports = pair[2];
-      fillSummary(st, ka);
+    // GET /entries/{name} 单接口已内联 keepalive + exposedPorts，无需再发 2 个请求
+    api('/entries/' + encodeURIComponent(name)).then(function (st) {
+      fillSummary(st, null);
       $('detailJson').textContent = JSON.stringify(st, null, 2);
-      fillKeepalive(ka.keepalive || {});
-      fillExposedPorts(ports.exposedPorts);
+      fillKeepalive(st.keepalive || {});
+      fillExposedPorts(st.exposedPorts);
       $('kaSaveMsg').textContent = '';
       $('portsSaveMsg').textContent = '';
     }).catch(function (e) {

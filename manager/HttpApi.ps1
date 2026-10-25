@@ -3,6 +3,12 @@
 
 Set-StrictMode -Version 2.0
 
+# Scheduled-task state index cache (taskName -> State string).
+# One Get-ScheduledTask enumeration serves the whole /entries request and is
+# reused across requests for a few seconds; mutating actions invalidate it.
+$script:ManagerSchedTaskCacheTtlSec = 5
+$script:ManagerSchedTaskCache = $null
+
 function ConvertTo-JsonResponseBytes {
     param($Obj, [int]$Depth = 12)
     $json = ($Obj | ConvertTo-Json -Depth $Depth -Compress)
@@ -116,19 +122,22 @@ function Invoke-ApiHandler {
             }
             'entries' {
                 if ($segs.Count -eq 3) {
-                    # GET /api/v1/entries
+                    # GET /api/v1/entries — in-process fast list, no CLI spawn
                     if ($method -ne 'GET') { Send-ApiJson -Response $Response -StatusCode 405 -Body @{ ok = $false; error = 'method_not_allowed' }; return }
-                    $list = Invoke-CliList -CliPath $CliPath -PackagesRoot $PackagesRoot
+                    $fast = Get-ManagerEntriesFast -PackagesRoot $PackagesRoot
+                    $stateDoc = Read-ManagerStateDoc -ManagerRoot $ManagerRoot
                     $enriched = New-Object System.Collections.Generic.List[object]
-                    foreach ($e in @($list.Entries)) {
+                    # PS 5.1: do NOT wrap List[object] with @() — binder cache bug raises 参数类型不匹配; foreach binds via PSEnumerableBinder instead.
+                    foreach ($e in $fast['entries']) {
                         $em = ConvertTo-PlainMap $e
                         $name = [string]$em['name']
-                        $st = Get-ManagerEntryState -ManagerRoot $ManagerRoot -Name $name
+                        $st = $null
+                        if ($stateDoc.Entries.ContainsKey($name)) {
+                            $st = ConvertTo-PlainMap $stateDoc.Entries[$name]
+                        }
                         $row = [ordered]@{}
                         foreach ($k in @($em.Keys)) { $row[$k] = $em[$k] }
                         $row['managerState'] = $st
-                        $portsInfo = Read-EntryExposedPorts -PackagesRoot $PackagesRoot -Name $name
-                        $row['exposedPorts'] = @($portsInfo.exposedPorts)
                         $enriched.Add($row)
                     }
                     Send-ApiJson -Response $Response -StatusCode 200 -Body @{
@@ -142,14 +151,19 @@ function Invoke-ApiHandler {
                 $action = if ($segs.Count -ge 5) { $segs[4] } else { $null }
 
                 if (-not $action) {
-                    # GET /api/v1/entries/{name}
+                    # GET /api/v1/entries/{name} — one response includes keepalive + exposedPorts
                     if ($method -ne 'GET') { Send-ApiJson -Response $Response -StatusCode 405 -Body @{ ok = $false; error = 'method_not_allowed' }; return }
                     $st = Invoke-CliStatus -CliPath $CliPath -Name $name -PackagesRoot $PackagesRoot
                     $slice = Get-ManagerEntryState -ManagerRoot $ManagerRoot -Name $name
+                    $ka = Read-EntryKeepalive -PackagesRoot $PackagesRoot -Name $name
+                    $portsInfo = Read-EntryExposedPorts -PackagesRoot $PackagesRoot -Name $name
                     Send-ApiJson -Response $Response -StatusCode 200 -Body @{
                         ok           = ($st.result -eq 'ok')
                         cli          = @{ result = $st.result; error = $st.error; data = $st.data }
                         managerState = $slice
+                        keepalive    = $(if ($ka.ok) { $ka.keepalive } else { $null })
+                        landing      = $(if ($ka.ok) { [string]$ka.landing } else { $null })
+                        exposedPorts = $(if ($portsInfo.ok) { @($portsInfo.exposedPorts) } else { @() })
                     }
                     return
                 }
@@ -170,6 +184,10 @@ function Invoke-ApiHandler {
                     Send-ApiJson -Response $Response -StatusCode 405 -Body @{ ok = $false; error = 'method_not_allowed' }
                     return
                 }
+
+                # Mutating action: drop read caches so the next read sees fresh state
+                Clear-CliStatusCache
+                Clear-ManagerScheduledTaskIndexCache
 
                 $cliResult = $null
                 switch ($action) {
@@ -881,6 +899,125 @@ function Read-EntryExposedPorts {
     return @{ ok = $true; error = $null; exposedPorts = $ports; path = $path }
 }
 
+function Get-ManagerScheduledTaskIndex {
+    <# taskName -> State string, via one CIM enumeration; cached briefly. #>
+    param([int]$TtlSec = 5)
+    $now = Get-Date
+    if ($null -ne $script:ManagerSchedTaskCache) {
+        $age = (New-TimeSpan -Start $script:ManagerSchedTaskCache['at'] -End $now).TotalSeconds
+        if ($age -lt [int]$TtlSec) {
+            return $script:ManagerSchedTaskCache['index']
+        }
+    }
+    $index = @{}
+    try {
+        foreach ($t in @(Get-ScheduledTask -ErrorAction SilentlyContinue)) {
+            $index[[string]$t.TaskName] = [string]$t.State
+        }
+    }
+    catch { }
+    $script:ManagerSchedTaskCache = @{ at = $now; index = $index }
+    return $index
+}
+
+function Clear-ManagerScheduledTaskIndexCache {
+    $script:ManagerSchedTaskCache = $null
+}
+
+function Get-ManagerEntryEnabledFast {
+    <#
+      In-process mirror of CLI Get-EntryEnabled using the cached task index.
+      scheduled-task: State Disabled -> false, other -> true, missing -> null.
+      startup: .lnk -> true, .lnk.disabled -> false, else null.
+      run-key: registry value present -> true, else false.
+    #>
+    param([string]$Name, [string]$Landing, $TaskIndex)
+    if (-not $Landing) { return $null }
+    if ($Landing -eq 'scheduled-task') {
+        if (-not $TaskIndex.ContainsKey($Name)) { return $null }
+        $state = [string]$TaskIndex[$Name]
+        if ($state -eq 'Disabled') { return $false }
+        return $true
+    }
+    if ($Landing -eq 'startup') {
+        $startupDir = [Environment]::GetFolderPath('Startup')
+        $lnkPath = Join-Path $startupDir ($Name + '.lnk')
+        if (Test-Path -Path $lnkPath -PathType Leaf) { return $true }
+        if (Test-Path -Path ($lnkPath + '.disabled') -PathType Leaf) { return $false }
+        return $null
+    }
+    if ($Landing -eq 'run-key') {
+        try {
+            $key = Get-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
+            if (-not $key) { return $false }
+            return ($null -ne $key.GetValue($Name, $null))
+        }
+        catch { return $false }
+    }
+    return $null
+}
+
+function Get-ManagerEntriesFast {
+    <#
+      In-process /entries source: dir scan + manifest JSON read, no CLI spawn.
+      Mirrors CLI Invoke-List entry shape (name/landing/mode/enabled/schema/root)
+      and pre-computes exposedPorts; landing fallback probes use the cached
+      scheduled-task index instead of per-entry CIM calls.
+    #>
+    param([string]$PackagesRoot)
+    $entries = New-Object System.Collections.Generic.List[object]
+    if (-not $PackagesRoot -or -not (Test-Path -Path $PackagesRoot -PathType Container)) {
+        return @{ parent = $PackagesRoot; entries = $entries }
+    }
+    $taskIndex = Get-ManagerScheduledTaskIndex
+    $startupDir = [Environment]::GetFolderPath('Startup')
+    $runKey = $null
+    try {
+        $runKey = Get-Item -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
+    }
+    catch { }
+
+    foreach ($d in @(Get-ChildItem -Path $PackagesRoot -Directory -ErrorAction SilentlyContinue)) {
+        $name = $d.Name
+        if ($name -eq '_manager') { continue }
+        $root = $d.FullName
+        $manifest = Read-EntryManifestForManager -PackagesRoot $PackagesRoot -Name $name
+        $vbsPath = Join-Path $root ($name + '.vbs')
+        $cmdPath = Join-Path $root ($name + '.cmd')
+        $hasArtifacts = (Test-Path -Path $vbsPath -PathType Leaf) -or (Test-Path -Path $cmdPath -PathType Leaf)
+        if ($null -eq $manifest -and -not $hasArtifacts) { continue }
+
+        $landing = $null
+        $mode = $null
+        $schema = $null
+        $rawPorts = $null
+        if ($null -ne $manifest) {
+            $props = $manifest.PSObject.Properties.Name
+            if (($props -contains 'landing') -and $manifest.landing) { $landing = [string]$manifest.landing }
+            if (($props -contains 'mode') -and $manifest.mode) { $mode = [string]$manifest.mode }
+            if (($props -contains 'schema') -and $manifest.schema) { $schema = [string]$manifest.schema }
+            if ($props -contains 'exposedPorts') { $rawPorts = $manifest.exposedPorts }
+        }
+        if (-not $landing) {
+            $lnkPath = Join-Path $startupDir ($name + '.lnk')
+            if ($taskIndex.ContainsKey($name)) { $landing = 'scheduled-task' }
+            elseif ((Test-Path -Path $lnkPath -PathType Leaf) -or (Test-Path -Path ($lnkPath + '.disabled') -PathType Leaf)) { $landing = 'startup' }
+            elseif ($runKey -and ($null -ne $runKey.GetValue($name, $null))) { $landing = 'run-key' }
+        }
+        $enabled = Get-ManagerEntryEnabledFast -Name $name -Landing $landing -TaskIndex $taskIndex
+        $entries.Add([ordered]@{
+            name         = $name
+            landing      = $landing
+            mode         = $mode
+            enabled      = $enabled
+            schema       = $schema
+            root         = $root
+            exposedPorts = $(Normalize-ExposedPorts -Raw $rawPorts)
+        })
+    }
+    return @{ parent = $PackagesRoot; entries = $entries }
+}
+
 function Write-EntryExposedPorts {
     param([string]$PackagesRoot, [string]$Name, $PortsBody)
     $path = Get-EntryManifestPath -PackagesRoot $PackagesRoot -Name $Name
@@ -977,6 +1114,7 @@ function Invoke-PortsApi {
             Send-ApiJson -Response $Response -StatusCode 404 -Body @{ ok = $false; error = $w.error }
             return
         }
+        Clear-CliStatusCache
         Write-ManagerLog -ManagerRoot $ManagerRoot -Level 'INFO' -Message ("exposedPorts updated for '{0}'" -f $Name)
         Send-ApiJson -Response $Response -StatusCode 200 -Body @{
             ok           = $true
@@ -1062,6 +1200,7 @@ function Invoke-KeepaliveApi {
             Send-ApiJson -Response $Response -StatusCode 404 -Body @{ ok = $false; error = $w.error }
             return
         }
+        Clear-CliStatusCache
         Write-ManagerLog -ManagerRoot $ManagerRoot -Level 'INFO' -Message ("keepalive updated for '{0}'" -f $Name)
         Send-ApiJson -Response $Response -StatusCode 200 -Body @{
             ok        = $true

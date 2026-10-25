@@ -67,10 +67,17 @@ function Test-ManagerProcessAlive {
     if (-not $ImageName) { return $false }
     $leaf = [System.IO.Path]::GetFileName($ImageName)
     try {
-        $procs = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+        # WQL filter by name: avoids enumerating every Win32_Process on the box
+        # on each probe (the old full scan blocked the serve loop for seconds).
+        $nameClauses = New-Object System.Collections.Generic.List[string]
+        foreach ($n in @($leaf, [string]$ImageName)) {
+            $s = [string]$n
+            if (-not $s) { continue }
+            $nameClauses.Add(("Name = '{0}'" -f $s.Replace("'", "''")))
+        }
+        $filter = ($nameClauses -join ' OR ')
+        $procs = @(Get-CimInstance -ClassName Win32_Process -Filter $filter -ErrorAction Stop |
             Where-Object {
-                $n = [string]$_.Name
-                if ($n -ne $leaf -and $n -ne $ImageName) { return $false }
                 if ($CommandLineContains) {
                     $cl = [string]$_.CommandLine
                     if (-not $cl) { return $false }

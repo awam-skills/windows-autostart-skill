@@ -3,6 +3,12 @@
 
 Set-StrictMode -Version 2.0
 
+# Short-TTL cache for CLI status results: panel refreshes hit the cache instead
+# of spawning a fresh powershell.exe per request. Mutating actions call
+# Clear-CliStatusCache so the next read sees fresh state.
+$script:CliStatusCacheTtlSec = 4
+$script:CliStatusCache = @{}
+
 function Resolve-AutostartCliPath {
     param([string]$CliPath, [string]$ManagerScriptPath)
     if ($CliPath -and (Test-Path -Path $CliPath -PathType Leaf)) {
@@ -126,8 +132,43 @@ function Invoke-CliList {
 }
 
 function Invoke-CliStatus {
+    <#
+      status result with short-TTL cache (skipped when CliInvokeHook is set,
+      e.g. tests, so stub invocations stay observable).
+    #>
     param([string]$CliPath, [string]$Name, [string]$PackagesRoot)
-    return (Invoke-AutostartCli -CliPath $CliPath -Arguments @('status', '-Name', $Name) -PackagesRoot $PackagesRoot)
+    $useCache = -not ($script:CliInvokeHook -is [scriptblock])
+    $key = [string]$Name
+    if ($useCache) {
+        if ($script:CliStatusCache.ContainsKey($key)) {
+            $c = $script:CliStatusCache[$key]
+            $age = (New-TimeSpan -Start $c['at'] -End (Get-Date)).TotalSeconds
+            if ($age -lt $script:CliStatusCacheTtlSec) {
+                return $c['result']
+            }
+        }
+    }
+    $r = Invoke-AutostartCli -CliPath $CliPath -Arguments @('status', '-Name', $Name) -PackagesRoot $PackagesRoot
+    if ($useCache) {
+        $script:CliStatusCache[$key] = @{ at = (Get-Date); result = $r }
+    }
+    return $r
+}
+
+function Clear-CliStatusCache {
+    <# Drop cached CLI status results; no name = clear all. #>
+    param([string]$Name)
+    if (-not ($script:CliStatusCache -is [hashtable])) {
+        $script:CliStatusCache = @{}
+        return
+    }
+    if ($Name) {
+        if ($script:CliStatusCache.ContainsKey([string]$Name)) {
+            $script:CliStatusCache.Remove([string]$Name)
+        }
+        return
+    }
+    $script:CliStatusCache = @{}
 }
 
 function Invoke-CliRun {
