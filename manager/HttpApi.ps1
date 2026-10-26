@@ -1293,6 +1293,9 @@ function Send-StaticWwwFile {
         $Response.StatusCode = 200
         $Response.ContentType = (Get-StaticContentType -Path $full)
         $Response.ContentLength64 = $bytes.Length
+        # 本机操作面板：禁止浏览器长缓存，改 disk 后刷新即可看到（不必硬刷新）
+        $Response.Headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        $Response.Headers['Pragma'] = 'no-cache'
         if ($Request.HttpMethod -ne 'HEAD') {
             $Response.OutputStream.Write($bytes, 0, $bytes.Length)
         }

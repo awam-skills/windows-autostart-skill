@@ -62,14 +62,31 @@
   }
 
   /**
+   * 是否视为已在跑 / 正常 / 正在启动（此时不应再点「启动」，应走重启）。
+   * 计划任务常很快变为 Ready，业务进程仍在，故不能只看 taskState===Running。
+   */
+  function isActiveOrStarting(entry) {
+    if (isStoppedIntent(entry)) return false;
+    if (isTaskRunning(entry)) return true;
+    var ms = (entry && entry.managerState) || {};
+    // 明确运行意图（含刚点过启动、健康尚未出结果）
+    if (ms.desiredEnabled === true) return true;
+    // 健康正常 → 清单「正常」
+    if (ms.lastHealthDetail && Number(ms.consecutiveHealthFailures || 0) === 0) return true;
+    return false;
+  }
+
+  /**
    * 按启用/停止意图区分可点操作。
    * - 已停止：不可再停、不可重启（应走启动）
+   * - 正常/运行中/正在启动：不可再启动（应走重启）
    * - 落点已启用/已禁用：对应 enable/disable 互斥
    */
   function actionAvailability(entry, action) {
     var enabled = entry && entry.enabled;
     var stopped = isStoppedIntent(entry);
     var running = isTaskRunning(entry);
+    var active = isActiveOrStarting(entry);
     if (action === 'stop') {
       if (stopped && !running) {
         return { allowed: false, reason: '当前已停止' };
@@ -81,8 +98,8 @@
       }
     }
     if (action === 'start') {
-      if (running && !stopped) {
-        return { allowed: false, reason: '任务已在运行，请使用重启' };
+      if (active) {
+        return { allowed: false, reason: '已在运行或正在启动，请使用重启' };
       }
     }
     if (action === 'enable') {
