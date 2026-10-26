@@ -6,8 +6,21 @@
 
   function $(id) { return document.getElementById(id); }
 
+  var ACTION_LABELS = { start: '启动', stop: '停止', restart: '重启', enable: '启用', disable: '禁用' };
+
+  function setMsg(msg, kind) {
+    var el = $('footerMsg');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.className = 'footer-msg' + (kind === 'ok' ? ' ok' : kind === 'err' ? ' err' : '');
+  }
+
   function setErr(msg) {
-    $('footerErr').textContent = msg || '';
+    setMsg(msg || '', msg ? 'err' : '');
+  }
+
+  function setOk(msg) {
+    setMsg(msg || '', msg ? 'ok' : '');
   }
 
   function api(path, opts) {
@@ -37,6 +50,87 @@
     return api('/entries/' + encodeURIComponent(name) + '/' + action, { method: 'POST' });
   }
 
+  /** 是否处于「已停止」意图：stop/disable 会写 desiredEnabled=false */
+  function isStoppedIntent(entry) {
+    var ms = (entry && entry.managerState) || {};
+    return ms.desiredEnabled === false;
+  }
+
+  /** 计划任务当前是否在跑（廉价字段；非计划任务落点为 null） */
+  function isTaskRunning(entry) {
+    return entry && entry.taskState === 'Running';
+  }
+
+  /**
+   * 按启用/停止意图区分可点操作。
+   * - 已停止：不可再停、不可重启（应走启动）
+   * - 落点已启用/已禁用：对应 enable/disable 互斥
+   */
+  function actionAvailability(entry, action) {
+    var enabled = entry && entry.enabled;
+    var stopped = isStoppedIntent(entry);
+    var running = isTaskRunning(entry);
+    if (action === 'stop') {
+      if (stopped && !running) {
+        return { allowed: false, reason: '当前已停止' };
+      }
+    }
+    if (action === 'restart') {
+      if (stopped && !running) {
+        return { allowed: false, reason: '当前已停止，请使用启动' };
+      }
+    }
+    if (action === 'start') {
+      if (running && !stopped) {
+        return { allowed: false, reason: '任务已在运行，请使用重启' };
+      }
+    }
+    if (action === 'enable') {
+      if (enabled === true) {
+        return { allowed: false, reason: '落点已启用' };
+      }
+    }
+    if (action === 'disable') {
+      if (enabled === false) {
+        return { allowed: false, reason: '落点已禁用' };
+      }
+    }
+    return { allowed: true, reason: '' };
+  }
+
+  function formatActionResult(name, action, j) {
+    var label = ACTION_LABELS[action] || action;
+    if (!j) return name + '：' + label + '完成';
+    if (action === 'restart') {
+      var rr = j.restart || {};
+      if (rr.skipped) {
+        return name + '：重启已跳过（' + (rr.reason || 'skipped') + '）';
+      }
+      if (j.ok === false || rr.ok === false) {
+        return name + '：重启失败' + (rr.reason ? '（' + rr.reason + '）' : '');
+      }
+      return name + '：已重启';
+    }
+    if (j.ok === false) {
+      var err = j.error || j.result || '失败';
+      return name + '：' + label + '失败（' + err + '）';
+    }
+    var extra = '';
+    var data = j.data || {};
+    if (action === 'stop') {
+      if (data.gracefulSelfStop) extra = '（控制面优雅退出）';
+      else if (Array.isArray(data.stoppedPids) && data.stoppedPids.length) {
+        extra = '（结束 PID ' + data.stoppedPids.join(', ') + '）';
+      }
+    }
+    if (action === 'enable' || action === 'disable') {
+      if (data.enabled === true) extra = '（落点已启用）';
+      else if (data.enabled === false) extra = '（落点已禁用）';
+    }
+    var partial = j.result === 'partial' ? '（部分成功）' : '';
+    return name + '：已' + label + partial + extra;
+  }
+
   function refreshHealth() {
     return api('/health').then(function (h) {
       state.paused = !!h.paused;
@@ -51,7 +145,7 @@
         badge.className = 'badge err';
         badge.textContent = '异常';
       }
-      setErr('');
+      // 不在此清空 footer：保留启停等操作结果，仅连接失败时覆盖
     }).catch(function (e) {
       $('healthBadge').className = 'badge err';
       $('healthBadge').textContent = '无法连接 API';
@@ -78,7 +172,7 @@
       var tr = document.createElement('tr');
       var enabled = e.enabled;
       var ms = e.managerState || {};
-      var msText = formatManagerStatus(ms, name);
+      var msText = formatManagerStatus(ms, name, e);
 
       tr.innerHTML =
         '<td><a href="#" data-open="' + escapeHtml(name) + '">' + escapeHtml(name) + '</a></td>' +
@@ -104,14 +198,27 @@
         var b = document.createElement('button');
         b.type = 'button';
         b.className = 'btn tiny' + (act === 'disable' || act === 'stop' ? ' danger' : '');
-        b.textContent = ({ start: '启动', stop: '停止', restart: '重启', enable: '启用', disable: '禁用' })[act];
-        b.addEventListener('click', function () {
+        b.textContent = ACTION_LABELS[act];
+        var avail = actionAvailability(e, act);
+        if (!avail.allowed) {
           b.disabled = true;
-          postAction(name, act).then(function () {
+          b.title = avail.reason;
+        }
+        b.addEventListener('click', function () {
+          if (b.disabled) return;
+          b.disabled = true;
+          setMsg(name + '：正在' + ACTION_LABELS[act] + '…', '');
+          postAction(name, act).then(function (j) {
+            var failed = (j && j.ok === false) ||
+              (act === 'restart' && j && j.restart && j.restart.ok === false);
+            var text = formatActionResult(name, act, j);
+            if (failed) setErr(text);
+            else setOk(text);
             return loadEntries();
           }).catch(function (err) {
-            setErr(err.message || String(err));
-          }).then(function () { b.disabled = false; });
+            setErr(name + '：' + ACTION_LABELS[act] + '失败 — ' + (err.message || String(err)));
+            return loadEntries();
+          });
         });
         actions.appendChild(b);
       });
@@ -173,12 +280,23 @@
     return '端口冲突：' + parts.join('；');
   }
 
-  function formatManagerStatus(ms, name) {
+  function formatManagerStatus(ms, name, entry) {
     if (name === 'win-autostart-manager') {
       return '<span class="status-ok">控制面自身</span>';
     }
-    if (!ms) return '—';
-    if (ms.desiredEnabled === false) return '<span class="status-soft">意图:禁用</span>';
+    var enabled = entry ? entry.enabled : null;
+    var taskState = entry ? entry.taskState : null;
+    if (ms && ms.desiredEnabled === false) {
+      if (enabled === false) return '<span class="status-soft">已禁用</span>';
+      return '<span class="status-soft">已停止</span>';
+    }
+    if (taskState === 'Running') {
+      return '<span class="status-ok">运行中</span>';
+    }
+    if (!ms) {
+      if (enabled === false) return '<span class="status-soft">已禁用</span>';
+      return '—';
+    }
     var fails = Number(ms.consecutiveHealthFailures || 0);
     if (fails > 0) {
       return '<span class="status-bad">健康失败×' + fails + '</span>';
@@ -188,6 +306,7 @@
       return '<span class="status-soft">正常（process 辅证未通过）</span>';
     }
     if (detail) return '<span class="status-ok">正常</span>';
+    if (enabled === false) return '<span class="status-soft">已禁用</span>';
     return '—';
   }
 
@@ -433,10 +552,16 @@
   $('portsForm').addEventListener('submit', saveExposedPorts);
   $('watchForm').addEventListener('submit', addWatch);
   $('btnPause').addEventListener('click', function () {
-    api('/pause', { method: 'POST' }).then(refreshHealth).catch(function (e) { setErr(e.message); });
+    api('/pause', { method: 'POST' }).then(function () {
+      setOk('已暂停探针与热重载');
+      return refreshHealth();
+    }).catch(function (e) { setErr(e.message); });
   });
   $('btnResume').addEventListener('click', function () {
-    api('/pause/resume', { method: 'POST' }).then(refreshHealth).catch(function (e) { setErr(e.message); });
+    api('/pause/resume', { method: 'POST' }).then(function () {
+      setOk('已恢复探针与热重载');
+      return refreshHealth();
+    }).catch(function (e) { setErr(e.message); });
   });
 
   refreshAll();

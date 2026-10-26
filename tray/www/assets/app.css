@@ -471,3 +471,7 @@ footer {
   padding-block: 12px;
 }
 .err { color: var(--error); }
+.footer-msg { color: var(--on-surface-variant); max-width: 70%; text-align: right; }
+.footer-msg.ok { color: var(--success); }
+.footer-msg.err { color: var(--error); }
+.btn[disabled][title] { cursor: not-allowed; }

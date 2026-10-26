@@ -961,8 +961,8 @@ function Get-ManagerEntriesFast {
     <#
       In-process /entries source: dir scan + manifest JSON read, no CLI spawn.
       Mirrors CLI Invoke-List entry shape (name/landing/mode/enabled/schema/root)
-      and pre-computes exposedPorts; landing fallback probes use the cached
-      scheduled-task index instead of per-entry CIM calls.
+      and pre-computes exposedPorts + taskState (from cached scheduled-task index);
+      landing fallback probes use the same index instead of per-entry CIM calls.
     #>
     param([string]$PackagesRoot)
     $entries = New-Object System.Collections.Generic.List[object]
@@ -1005,6 +1005,11 @@ function Get-ManagerEntriesFast {
             elseif ($runKey -and ($null -ne $runKey.GetValue($name, $null))) { $landing = 'run-key' }
         }
         $enabled = Get-ManagerEntryEnabledFast -Name $name -Landing $landing -TaskIndex $taskIndex
+        # 计划任务 State 已在整表索引中，顺带返回供控制台区分运行/停止（无额外 CIM）
+        $taskState = $null
+        if ($landing -eq 'scheduled-task' -and $taskIndex.ContainsKey($name)) {
+            $taskState = [string]$taskIndex[$name]
+        }
         $entries.Add([ordered]@{
             name         = $name
             landing      = $landing
@@ -1013,6 +1018,7 @@ function Get-ManagerEntriesFast {
             schema       = $schema
             root         = $root
             exposedPorts = $(Normalize-ExposedPorts -Raw $rawPorts)
+            taskState    = $taskState
         })
     }
     return @{ parent = $PackagesRoot; entries = $entries }

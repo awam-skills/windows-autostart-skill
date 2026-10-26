@@ -39,7 +39,7 @@
     <section id="tab-entries" class="panel active">
       <div class="panel-head">
         <h2>登记清单</h2>
-        <p class="hint">启停 / 启用禁用走控制面 API，再调用注册面 CLI。</p>
+        <p class="hint">启停 / 启用禁用走控制面 API。按钮随启用与停止意图灰显；结果见页脚。</p>
       </div>
       <div class="table-wrap">
         <table id="entriesTable">
@@ -168,7 +168,7 @@
   <footer>
     <div class="container footer-inner">
       <span>API 前缀 <code>/api/v1</code></span>
-      <span id="footerErr" class="err"></span>
+      <span id="footerMsg" class="footer-msg" role="status" aria-live="polite"></span>
     </div>
   </footer>
   <script src="/assets/app.js"></script>
